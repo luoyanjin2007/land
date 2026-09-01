@@ -114,6 +114,23 @@ async function main() {
     }
   }
 
+  // 边缘修复：把四周 n 像素的环带替换成向内 n 像素处的像素
+  // （AI 图集的白色网格线会渗进格子边缘，裁切+复制双保险去白边）
+  function clampEdges(img, n = 3) {
+    const w = img.bitmap.width, h = img.bitmap.height, d = img.bitmap.data;
+    const get = (x, y) => { const i = (y * w + x) * 4; return [d[i], d[i + 1], d[i + 2], d[i + 3]]; };
+    const set = (x, y, p) => { const i = (y * w + x) * 4; d[i] = p[0]; d[i + 1] = p[1]; d[i + 2] = p[2]; d[i + 3] = p[3]; };
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (x < n || y < n || x >= w - n || y >= h - n) {
+          const sx = Math.min(w - 1 - n, Math.max(n, x));
+          const sy = Math.min(h - 1 - n, Math.max(n, y));
+          set(x, y, get(sx, sy));
+        }
+      }
+    }
+  }
+
   // ---------- 地面瓷砖图集：4 列 × 4 行，整格无缝裁切 ----------
   // 瓷砖是满格贴图，不需要去白底，直接按格切
   const tSrc = await Jimp.read(path.join(ROOT, 'assets', '地面瓷砖图集.jpeg'));
@@ -130,13 +147,14 @@ async function main() {
     for (let c = 0; c < TC; c++) {
       const name = tNames[r][c];
       if (!name) continue;
-      // 收缩 4% 再裁，避免把格与格之间的白边带进来
-      const inset = Math.floor(tw * 0.04);
+      // 收缩 7% 再裁，避开图集白色网格线
+      const inset = Math.floor(tw * 0.07);
       const cell = tSrc.clone().crop({
         x: c * tw + inset, y: r * th + inset,
         w: tw - inset * 2, h: th - inset * 2,
       });
       cell.resize({ w: 128, h: 128 });
+      clampEdges(cell, 3); // 残留白边用内侧纹理覆盖
       await cell.write(path.join(OUT, `${name}.png`));
     }
   }
