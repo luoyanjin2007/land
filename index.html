@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>孤岛求生 · GAME19</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: "Microsoft YaHei", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    user-select: none;
+  }
+  h1 { margin: 12px 0 4px; font-size: 22px; color: #7ec850; letter-spacing: 4px; }
+  #hud { display: flex; gap: 18px; margin: 6px 0; font-size: 14px; flex-wrap: wrap; justify-content: center; }
+  .bar { display: inline-flex; align-items: center; gap: 6px; }
+  .bar-track { width: 110px; height: 10px; background: #333; border-radius: 5px; overflow: hidden; }
+  .bar-fill { display: block; height: 100%; width: 100%; border-radius: 5px; transition: width .2s; }
+  #hp-fill { background: #e74c3c; }
+  #hunger-fill { background: #f39c12; }
+  canvas { border: 3px solid #444; border-radius: 6px; background: #000; }
+  #tips { margin: 8px 0; font-size: 12px; color: #888; text-align: center; line-height: 1.7; }
+  kbd { background: #333; padding: 1px 6px; border-radius: 4px; border: 1px solid #555; font-size: 11px; }
+  #overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.82);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; z-index: 10;
+  }
+  #overlay.hidden { display: none; }
+  #overlay h2 { font-size: 34px; color: #e74c3c; }
+  #overlay .stats { font-size: 16px; color: #aaa; }
+  #overlay input {
+    padding: 8px 14px; font-size: 16px; border-radius: 6px; border: 1px solid #555;
+    background: #222; color: #fff; width: 220px; text-align: center;
+  }
+  #overlay button {
+    padding: 10px 26px; font-size: 16px; border: none; border-radius: 6px;
+    background: #7ec850; color: #14320a; cursor: pointer; font-weight: bold;
+  }
+  #overlay button:hover { background: #95dd66; }
+  #board { font-size: 14px; line-height: 1.9; color: #ccc; text-align: left; }
+  #board .me { color: #f1c40f; }
+  #saveinfo { font-size: 11px; color: #555; margin-bottom: 6px; }
+</style>
+</head>
+<body>
+  <h1>孤 岛 求 生</h1>
+  <div id="hud">
+    <span>🗓️ 第 <b id="day">1</b> 天 <span id="phase">☀️白天</span></span>
+    <span class="bar">❤️ <span class="bar-track"><span class="bar-fill" id="hp-fill"></span></span></span>
+    <span class="bar">🍗 <span class="bar-track"><span class="bar-fill" id="hunger-fill"></span></span></span>
+    <span>🪵 <b id="wood">0</b></span>
+    <span>🪨 <b id="stone">0</b></span>
+    <span>🫐 <b id="berry">0</b></span>
+    <span>⭐ <b id="score">0</b></span>
+  </div>
+  <canvas id="game" width="720" height="720"></canvas>
+  <div id="saveinfo"></div>
+  <div id="tips">
+    <kbd>W A S D</kbd> / 方向键移动 · <kbd>E</kbd> 采集 / 拾取 · <kbd>Q</kbd> 吃浆果<br>
+    饥饿归零会掉血 · 每天结束饥饿 -10 · 活得越久、采集越多，分数越高
+  </div>
+
+  <div id="overlay">
+    <h2 id="ov-title">你死了…</h2>
+    <div class="stats" id="ov-stats"></div>
+    <input id="name-input" maxlength="12" placeholder="输入你的名字（最多12字）">
+    <button id="submit-btn">提交分数到排行榜</button>
+    <div id="board"></div>
+    <button id="restart-btn" style="background:#4a90d9;color:#fff;">再来一局</button>
+  </div>
+
+<script>
+/* ============ 配置 ============ */
+const SUPABASE_URL = 'https://sqpkfvfnsbvgywwtpsjm.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNxcGtmdmZuc2J2Z3l3d3Rwc2ptIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0OTg3NDksImV4cCI6MjA4OTA3NDc0OX0.FqPuOsTmARhuNQj9H5HanXu0g7QOSQEYHxo0v0mbnNI';
+const SAVE_KEY = 'game19_save_v1';
+
+const MAP_W = 50, MAP_H = 50;          // 有限地图：50×50
+const TILE = 36;                        // 每格像素
+const VIEW_W = 20, VIEW_H = 20;         // 视口格数
+const DAY_TICKS = 1200;                 // 一天 = 1200 帧（约 20 秒 @60fps）
+
+/* ============ 地图生成 ============ */
+// 简单可复现的随机数（每次开局用新种子，地图固定不会中途变化）
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+const T = { GRASS: 0, WATER: 1, TREE: 2, ROCK: 3, BERRY: 4, SAND: 5 };
+
+function genMap(seed) {
+  const rng = mulberry32(seed);
+  const map = [];
+  for (let y = 0; y < MAP_H; y++) {
+    map[y] = [];
+    for (let x = 0; x < MAP_W; x++) {
+      // 边缘是海，向外两格渐变成沙滩
+      const edge = Math.min(x, y, MAP_W - 1 - x, MAP_H - 1 - y);
+      let tile = T.GRASS;
+      if (edge === 0) tile = T.WATER;
+      else if (edge === 1) tile = T.SAND;
+      else if (edge === 2 && rng() < 0.3) tile = T.SAND;
+      map[y][x] = { t: tile, res: null };
+    }
+  }
+  // 内陆撒资源
+  for (let y = 3; y < MAP_H - 3; y++) {
+    for (let x = 3; x < MAP_W - 3; x++) {
+      const r = rng();
+      if (r < 0.14) map[y][x] = { t: T.TREE, res: 'wood' };
+      else if (r < 0.20) map[y][x] = { t: T.ROCK, res: 'stone' };
+      else if (r < 0.25) map[y][x] = { t: T.BERRY, res: 'berry' };
+    }
+  }
+  // 中间挖个小湖
+  const lx = 10 + Math.floor(rng() * 30), ly = 10 + Math.floor(rng() * 30);
+  for (let y = ly; y < ly + 4; y++) for (let x = lx; x < lx + 5; x++)
+    if (map[y] && map[y][x]) map[y][x] = { t: T.WATER, res: null };
+  return map;
+}
+
+/* ============ 游戏状态 ============ */
+let map, player, tick, gameOver, submitted;
+
+function newGame() {
+  map = genMap((Math.random() * 1e9) | 0);
+  player = {
+    x: MAP_W >> 1, y: MAP_H >> 1,
+    hp: 100, hunger: 100,
+    wood: 0, stone: 0, berry: 3, gathered: 0,
+  };
+  // 出生点若被资源挡住，清理周围一圈
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+    const c = map[player.y + dy] && map[player.y + dy][player.x + dx];
+    if (c && c.res) { c.res = null; if (c.t !== T.GRASS) c.t = T.GRASS; }
+  }
+  tick = 0; gameOver = false; submitted = false;
+  document.getElementById('overlay').classList.add('hidden');
+  save();
+}
+
+function save() {
+  const data = { map, player, tick, gameOver };
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch (e) {}
+}
+
+function load() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return false;
+    const d = JSON.parse(raw);
+    if (!d.map || d.gameOver) return false;
+    map = d.map; player = d.player; tick = d.tick; gameOver = false;
+    return true;
+  } catch (e) { return false; }
+}
+
+/* ============ 操作 ============ */
+const keys = {};
+addEventListener('keydown', e => {
+  if (gameOver) return;
+  const k = e.key.toLowerCase();
+  keys[k] = true;
+  if (k === 'e') interact();
+  if (k === 'q') eat();
+  if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(k)) e.preventDefault();
+});
+addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+function walkable(x, y) {
+  if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return false;
+  const c = map[y][x];
+  return c.t !== T.WATER; // 树和石头挡路吗？——不挡，简化为可走（采集后再消失也行）
+}
+
+function move(dx, dy) {
+  const nx = player.x + dx, ny = player.y + dy;
+  if (walkable(nx, ny)) { player.x = nx; player.y = ny; }
+  // 移动消耗饥饿
+  player.hunger = Math.max(0, player.hunger - 0.01);
+}
+
+function interact() {
+  const c = map[player.y][player.x];
+  const here = c.res;
+  // 先采脚下，再采四邻
+  const targets = [[0,0],[1,0],[-1,0],[0,1],[0,-1]];
+  for (const [dx, dy] of targets) {
+    const t = map[player.y + dy] && map[player.y + dy][player.x + dx];
+    if (t && t.res) {
+      if (t.res === 'wood') player.wood++;
+      if (t.res === 'stone') player.stone++;
+      if (t.res === 'berry') { player.berry += 2; }
+      t.res = null;
+      if (t.t === T.BERRY) t.t = T.GRASS;   // 采完变草地
+      player.gathered++;
+      save();
+      return;
+    }
+  }
+}
+
+function eat() {
+  if (player.berry > 0 && player.hunger < 100) {
+    player.berry--;
+    player.hunger = Math.min(100, player.hunger + 25);
+    save();
+  }
+}
+
+function score() {
+  return player.gathered * 5 + player.wood * 2 + player.stone * 3 + player.berry;
+}
+
+/* ============ 主循环 ============ */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let last = 0;
+
+function loop(ts) {
+  requestAnimationFrame(loop);
+  const dt = ts - last;
+  if (dt < 1000 / 60) return;   // 锁 60fps
+  last = ts;
+  if (!gameOver) update();
+  draw();
+  updateHUD();
+}
+
+function update() {
+  // 移动（按住持续走）
+  if (keys['w'] || keys['arrowup']) move(0, -1);
+  if (keys['s'] || keys['arrowdown']) move(0, 1);
+  if (keys['a'] || keys['arrowleft']) move(-1, 0);
+  if (keys['d'] || keys['arrowright']) move(1, 0);
+
+  tick++;
+  // 时间流逝：饥饿缓慢下降
+  player.hunger = Math.max(0, player.hunger - 0.006);
+  if (player.hunger <= 0) player.hp -= 0.05;
+  // 每天结束额外饿 10
+  if (tick % DAY_TICKS === 0) player.hunger = Math.max(0, player.hunger - 10);
+
+  if (player.hp <= 0) die();
+
+  // 每 3 秒自动存档
+  if (tick % 180 === 0) save();
+}
+
+function die() {
+  gameOver = true;
+  save();
+  const ov = document.getElementById('overlay');
+  document.getElementById('ov-title').textContent = '你死了…';
+  document.getElementById('ov-stats').textContent =
+    `存活 ${Math.floor(tick / DAY_TICKS) + 1} 天 · 采集 ${player.gathered} 次 · 得分 ${score()}`;
+  document.getElementById('name-input').value = localStorage.getItem('game19_name') || '';
+  ov.classList.remove('hidden');
+  loadBoard();
+  // 清掉死亡存档
+  localStorage.removeItem(SAVE_KEY);
+}
+
+/* ============ 渲染 ============ */
+const COLORS = {
+  [T.GRASS]: '#5d9e4a', [T.WATER]: '#2e6fb0', [T.SAND]: '#d9c47a',
+  [T.TREE]: '#3e7d33', [T.ROCK]: '#8a8a8a', [T.BERRY]: '#7a5ba8',
+};
+
+function draw() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // 相机跟随（地图比视口大）
+  const px = player.x * TILE + TILE / 2, py = player.y * TILE + TILE / 2;
+  const camX = Math.max(0, Math.min(MAP_W * TILE - canvas.width, px - canvas.width / 2));
+  const camY = Math.max(0, Math.min(MAP_H * TILE - canvas.height, py - canvas.height / 2));
+
+  const x0 = Math.floor(camX / TILE), y0 = Math.floor(camY / TILE);
+  const x1 = Math.min(MAP_W, x0 + VIEW_W + 1), y1 = Math.min(MAP_H, y0 + VIEW_H + 1);
+
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const c = map[y][x];
+      const sx = x * TILE - camX, sy = y * TILE - camY;
+      ctx.fillStyle = COLORS[c.t];
+      ctx.fillRect(sx, sy, TILE, TILE);
+      // 资源图标
+      if (c.res === 'wood') drawIcon(sx, sy, '🌲');
+      else if (c.res === 'stone') drawIcon(sx, sy, '🪨');
+      else if (c.res === 'berry') drawIcon(sx, sy, '🫐');
+      // 网格线
+      ctx.strokeStyle = 'rgba(0,0,0,.12)';
+      ctx.strokeRect(sx + .5, sy + .5, TILE - 1, TILE - 1);
+    }
+  }
+
+  // 玩家
+  drawIcon(px - TILE / 2 - camX, py - TILE / 2 - camY, '🧍');
+
+  // 昼夜遮罩：一天的 20% 是夜晚
+  const dayPhase = (tick % DAY_TICKS) / DAY_TICKS;
+  const night = dayPhase > 0.8 ? Math.min(0.55, (dayPhase - 0.8) * 5) : 0;
+  if (night > 0) {
+    ctx.fillStyle = `rgba(10,10,40,${night})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
+function drawIcon(sx, sy, emoji) {
+  ctx.font = `${TILE - 6}px serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(emoji, sx + TILE / 2, sy + TILE / 2);
+}
+
+/* ============ HUD ============ */
+function updateHUD() {
+  document.getElementById('day').textContent = Math.floor(tick / DAY_TICKS) + 1;
+  const dayPhase = (tick % DAY_TICKS) / DAY_TICKS;
+  document.getElementById('phase').textContent = dayPhase > 0.8 ? '🌙夜晚' : '☀️白天';
+  document.getElementById('hp-fill').style.width = player.hp + '%';
+  document.getElementById('hunger-fill').style.width = player.hunger + '%';
+  document.getElementById('wood').textContent = player.wood;
+  document.getElementById('stone').textContent = player.stone;
+  document.getElementById('berry').textContent = player.berry;
+  document.getElementById('score').textContent = score();
+}
+
+/* ============ Supabase 排行榜（直接 REST，无需 SDK） ============ */
+async function loadBoard() {
+  const boardEl = document.getElementById('board');
+  boardEl.textContent = '排行榜加载中…';
+  try {
+    const url = `${SUPABASE_URL}/rest/v1/leaderboard?select=player_name,score,days,created_at&order=score.desc,created_at.asc&limit=10`;
+    const r = await fetch(url, {
+      headers: { apikey: SUPABASE_ANON, Authorization: `Bearer ${SUPABASE_ANON}` },
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const rows = await r.json();
+    if (!rows.length) { boardEl.textContent = '还没有人上榜，成为第一个吧！'; return; }
+    boardEl.innerHTML = '🏆 <b>排行榜 TOP 10</b><br>' + rows.map((row, i) =>
+      `${i + 1}. <span class="me">${esc(row.player_name)}</span> — ${row.score} 分 · 存活 ${row.days} 天`
+    ).join('<br>');
+  } catch (e) {
+    boardEl.textContent = '排行榜暂时连不上（' + e.message + '）';
+  }
+}
+
+async function submitScore() {
+  const btn = document.getElementById('submit-btn');
+  const name = document.getElementById('name-input').value.trim();
+  if (!name) { alert('先输入名字！'); return; }
+  localStorage.setItem('game19_name', name);
+  btn.disabled = true; btn.textContent = '提交中…';
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/leaderboard`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_ANON, Authorization: `Bearer ${SUPABASE_ANON}`,
+        'Content-Type': 'application/json', Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({
+        player_name: name,
+        score: score(),
+        days: Math.floor(tick / DAY_TICKS) + 1,
+      }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    submitted = true;
+    btn.textContent = '✅ 已提交';
+    loadBoard();
+  } catch (e) {
+    alert('提交失败：' + e.message);
+    btn.disabled = false; btn.textContent = '提交分数到排行榜';
+  }
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+/* ============ 启动 ============ */
+document.getElementById('submit-btn').addEventListener('click', submitScore);
+document.getElementById('restart-btn').addEventListener('click', () => { newGame(); });
+
+// 有存档就续玩，没有就开新局
+const resumed = load();
+if (!resumed) newGame();
+else {
+  document.getElementById('overlay').classList.add('hidden');
+  document.getElementById('saveinfo').textContent =
+    `📂 已从上次存档继续（第 ${Math.floor(tick / DAY_TICKS) + 1} 天）· 死亡后存档清空`;
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
