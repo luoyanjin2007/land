@@ -130,8 +130,35 @@ const Effects = {
     }
   },
 
-  spawnRipple(wx, wy, max, life) {
-    // 池上限防爆
+  // 把天空贴图四边做渐隐处理（预渲染一次）：边缘 alpha 降到 0，平铺无缝
+  buildFeatheredSky() {
+    const T = 1024, F = 150; // F = 渐隐带宽度
+    const c = document.createElement('canvas');
+    c.width = c.height = T;
+    const g = c.getContext('2d');
+    g.drawImage(this.skyImg, 0, 0, T, T);
+    g.globalCompositeOperation = 'destination-in';
+    // 横向渐隐
+    let grad = g.createLinearGradient(0, 0, T, 0);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(F / T, 'rgba(0,0,0,1)');
+    grad.addColorStop(1 - F / T, 'rgba(0,0,0,1)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, T, T);
+    // 纵向渐隐
+    grad = g.createLinearGradient(0, 0, 0, T);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(F / T, 'rgba(0,0,0,1)');
+    grad.addColorStop(1 - F / T, 'rgba(0,0,0,1)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, T, T);
+    g.globalCompositeOperation = 'source-over';
+    this.skyFeather = c;
+  },
+
+  spawnRipple(wx, wy, max, life) {    // 池上限防爆
     if (this.ripples.length > 260) this.ripples.shift();
     this.ripples.push({ x: wx, y: wy, t: 0, life, max });
   },
@@ -166,11 +193,13 @@ const Effects = {
     const by = -((((Render.camY + time * 0.013) % T) + T) % T);           // ∈ (-T, 0]
     const sky = this.skyImg;
     if (sky && sky.complete && sky.naturalWidth) {
-      // AI 天空贴图：半透明铺在水面 = 天空倒影，水面纹理隐约透出
+      // AI 天空贴图：四边羽化后平铺——云飘到贴图边缘前淡出，
+      // 既不会被切断"缺角"，也不会镜像融合成对称大云
+      if (!this.skyFeather) this.buildFeatheredSky();
       fx.globalAlpha = 0.68;
       for (let ox = 0; ox <= 2; ox++) {
         for (let oy = 0; oy <= 2; oy++) {
-          fx.drawImage(sky, bx + ox * T, by + oy * T);
+          fx.drawImage(this.skyFeather, bx + ox * T, by + oy * T);
         }
       }
       fx.globalAlpha = 1;
