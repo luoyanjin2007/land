@@ -1,0 +1,27 @@
+{
+  "name": "game19",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luoyanjin2007/land.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/luoyanjin2007/land/issues"
+  },
+  "homepage": "https://github.com/luoyanjin2007/land#readme",
+  "dependencies": {
+    "jimp": "^1.6.1"
+  }
+}
