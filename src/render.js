@@ -8,7 +8,7 @@ const Render = {
 
   // 各地形的基础色
   COLORS: {
-    [TILE_TYPE.WATER]: '#2e6fb0',
+    [TILE_TYPE.WATER]: '#1e5588',
     [TILE_TYPE.SAND]: '#d9c47a',
     [TILE_TYPE.GRASS]: '#5d9e4a',
     [TILE_TYPE.FOREST]: '#4a8a3d',
@@ -124,6 +124,8 @@ const Render = {
         this.drawGround(x, y, time);
       }
     }
+    // 1.5 遍：水面特效层（云朵倒影 + 涟漪，裁剪在水格内）
+    Effects.drawWaterFX(x0, y0, x1, y1, time);
     // 第二遍：画立起来的建筑/树（保证树冠能盖住上一行的地面）
     for (let y = y0; y < y1; y++) {
       for (let x = x0; x < x1; x++) {
@@ -132,6 +134,9 @@ const Render = {
     }
     // 第三遍：人物（最上层）
     this.drawPlayer(time);
+
+    // 雨丝（屏幕空间，盖在最上面）
+    Effects.drawRain();
 
     this.drawMinimap();
     this.drawHUD();
