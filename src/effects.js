@@ -62,8 +62,6 @@ const Effects = {
 
   // 天气：用慢正弦模拟 晴 → 雨 → 晴 的循环（约 100 秒一轮）
   rainLevel(time) {
-    return 0.9; // DEBUG
-
     const v = Math.sin((time / 1000 / 100) * Math.PI * 2);
     return Math.max(0, v - 0.3) / 0.7; // 0=完全无雨，1=大雨
   },
