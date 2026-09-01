@@ -4,6 +4,9 @@
 # 密钥（绝不提交）
 .env
 
+# 本地构建产物（部署用的 dist 由 CI 服务器现做）
+dist/
+
 # 系统文件
 Thumbs.db
 .DS_Store
