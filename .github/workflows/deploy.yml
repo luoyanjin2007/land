@@ -11,13 +11,13 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@v4
 
-      - name: 打包静态文件（游戏本体 + 贴图 + 开场画，不含密钥和工具）
+      - name: 打包静态文件（游戏本体 + 贴图 + 美术资源，不含密钥和工具）
         run: |
           mkdir -p dist/src dist/assets
           cp index.html dist/
           cp src/*.js dist/src/
           cp assets/sprites dist/assets/ -r
-          cp "assets/圣魂村-俯视地图.jpeg" dist/assets/
+          cp "assets/圣魂村-俯视地图.jpeg" "assets/天空云影-裁剪.jpeg" dist/assets/
 
       - name: 部署到 Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
