@@ -62,6 +62,7 @@ const Effects = {
 
   // 天气：用慢正弦模拟 晴 → 雨 → 晴 的循环（约 100 秒一轮）
   rainLevel(time) {
+    return 0.9; // DEBUG
 
     const v = Math.sin((time / 1000 / 100) * Math.PI * 2);
     return Math.max(0, v - 0.3) / 0.7; // 0=完全无雨，1=大雨
@@ -82,7 +83,7 @@ const Effects = {
         const tx = Math.floor(wx / CONFIG.TILE), ty = Math.floor(wy / CONFIG.TILE);
         const isWater = World.tileAt(tx, ty) === TILE_TYPE.WATER;
         if (isWater) this.spawnRipple(wx, wy, 14, 1.1, false);
-        else this.spawnRipple(wx, wy, 7, 0.45, true); // 陆地溅落：弹点 + 小涟漪
+        else this.spawnRipple(wx, wy, 7, 0.45, true); // 陆地：只有水珠溅起
       }
     }
 
@@ -163,31 +164,20 @@ const Effects = {
     this.ripples.push({ x: wx, y: wy, t: 0, life, max, land: !!land });
   },
 
-  // 陆地溅落：直接画在主画布上（不经过水面裁剪层）
-  // 前段是小水珠弹起，后段荡开一圈涟漪
-  drawLandSplashes() {
+  // 雨滴溅起的水珠：直接画在主画布上（不经过水面裁剪层），陆地上也可见
+  // 只画弹起的水珠；涟漪圈是水面专属，在 fx 裁剪层里画
+  drawSplashes() {
     const { ctx } = Render;
     ctx.save();
     for (const r of this.ripples) {
-      if (!r.land) continue;
       const p = r.t / r.life;
+      if (p >= 0.35) continue; // 后段交给涟漪圈
+      const q = p / 0.35;
       const sx = r.x - Render.camX, sy = r.y - Render.camY;
-      if (p < 0.35) {
-        // 弹起的小水珠：一个迅速缩小的亮点
-        const q = p / 0.35;
-        ctx.fillStyle = `rgba(235,248,255,${0.9 * (1 - q)})`;
-        ctx.beginPath();
-        ctx.arc(sx, sy - 5 * Math.sin(q * Math.PI), 2.4 * (1 - q * 0.5), 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        // 落地后荡开的涟漪圈
-        const q = (p - 0.35) / 0.65;
-        ctx.strokeStyle = `rgba(225,242,255,${0.75 * (1 - q)})`;
-        ctx.lineWidth = 1.4;
-        ctx.beginPath();
-        ctx.ellipse(sx, sy, 7 * q + 1, (7 * q + 1) * 0.55, 0, 0, Math.PI * 2);
-        ctx.stroke();
-      }
+      ctx.fillStyle = `rgba(235,248,255,${0.9 * (1 - q)})`;
+      ctx.beginPath();
+      ctx.arc(sx, sy - 5 * Math.sin(q * Math.PI), 2.4 * (1 - q * 0.5), 0, Math.PI * 2);
+      ctx.fill();
     }
     ctx.restore();
   },
@@ -242,15 +232,18 @@ const Effects = {
       fx.fillRect(0, 0, this.fxCanvas.width, this.fxCanvas.height);
     }
 
-    // 3. 涟漪圈画进特效层（只画水面涟漪；陆地溅落单独直绘）
+    // 3. 涟漪圈画进特效层：水面专属（陆地只有水珠，没有波纹）
+    //    前段 0~0.35 是水珠弹起（直绘层负责），这里只画落地后的圈
     fx.strokeStyle = 'rgba(235,245,255,1)';
     for (const r of this.ripples) {
       if (r.land) continue;
       const p = r.t / r.life;
+      if (p < 0.35) continue;
+      const q = (p - 0.35) / 0.65;
       const sx = r.x - Render.camX, sy = r.y - Render.camY;
-      fx.globalAlpha = (1 - p) * 0.55;
+      fx.globalAlpha = (1 - q) * 0.55;
       fx.beginPath();
-      fx.ellipse(sx, sy, r.max * p + 1, (r.max * p + 1) * 0.55, 0, 0, Math.PI * 2);
+      fx.ellipse(sx, sy, r.max * (0.3 + 0.7 * q) + 1, (r.max * (0.3 + 0.7 * q) + 1) * 0.55, 0, 0, Math.PI * 2);
       fx.stroke();
     }
     fx.globalAlpha = 1;
