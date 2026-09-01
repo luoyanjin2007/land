@@ -124,8 +124,9 @@ const Render = {
         this.drawGround(x, y, time);
       }
     }
-    // 1.5 遍：水面特效层（云朵倒影 + 涟漪，裁剪在水格内）
+    // 1.5 遍：水面特效层（云朵倒影 + 水面涟漪，裁剪在水格内）+ 陆地雨滴溅落
     Effects.drawWaterFX(x0, y0, x1, y1, time);
+    Effects.drawLandSplashes();
     // 第二遍：画立起来的建筑/树（保证树冠能盖住上一行的地面）
     for (let y = y0; y < y1; y++) {
       for (let x = x0; x < x1; x++) {

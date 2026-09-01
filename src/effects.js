@@ -62,6 +62,7 @@ const Effects = {
 
   // 天气：用慢正弦模拟 晴 → 雨 → 晴 的循环（约 100 秒一轮）
   rainLevel(time) {
+
     const v = Math.sin((time / 1000 / 100) * Math.PI * 2);
     return Math.max(0, v - 0.3) / 0.7; // 0=完全无雨，1=大雨
   },
@@ -70,19 +71,18 @@ const Effects = {
   update(dt, time) {
     const level = this.rainLevel(time);
 
-    // ---- 雨天随机涟漪：落在镜头附近的随机点上（水面的大圈，地面的小圈）----
+    // ---- 雨天随机涟漪：落在镜头附近的随机点上（水面的大圈，地面的溅落）----
     this.rainTimer -= dt;
     if (level > 0.05 && this.rainTimer <= 0) {
       this.rainTimer = 0.05;
-      const n = Math.ceil(level * 3);
+      const n = Math.ceil(level * 4);
       for (let i = 0; i < n; i++) {
         const wx = Render.camX + Math.random() * innerWidth;
         const wy = Render.camY + Math.random() * innerHeight;
         const tx = Math.floor(wx / CONFIG.TILE), ty = Math.floor(wy / CONFIG.TILE);
         const isWater = World.tileAt(tx, ty) === TILE_TYPE.WATER;
-        // 地面涟漪小而稀，水面涟漪大而密
-        if (isWater) this.spawnRipple(wx, wy, 14, 1.1);
-        else if (Math.random() < level * 0.25) this.spawnRipple(wx, wy, 5, 0.5);
+        if (isWater) this.spawnRipple(wx, wy, 14, 1.1, false);
+        else this.spawnRipple(wx, wy, 7, 0.45, true); // 陆地溅落：弹点 + 小涟漪
       }
     }
 
@@ -158,9 +158,38 @@ const Effects = {
     this.skyFeather = c;
   },
 
-  spawnRipple(wx, wy, max, life) {    // 池上限防爆
-    if (this.ripples.length > 260) this.ripples.shift();
-    this.ripples.push({ x: wx, y: wy, t: 0, life, max });
+  spawnRipple(wx, wy, max, life, land) {    // 池上限防爆
+    if (this.ripples.length > 320) this.ripples.shift();
+    this.ripples.push({ x: wx, y: wy, t: 0, life, max, land: !!land });
+  },
+
+  // 陆地溅落：直接画在主画布上（不经过水面裁剪层）
+  // 前段是小水珠弹起，后段荡开一圈涟漪
+  drawLandSplashes() {
+    const { ctx } = Render;
+    ctx.save();
+    for (const r of this.ripples) {
+      if (!r.land) continue;
+      const p = r.t / r.life;
+      const sx = r.x - Render.camX, sy = r.y - Render.camY;
+      if (p < 0.35) {
+        // 弹起的小水珠：一个迅速缩小的亮点
+        const q = p / 0.35;
+        ctx.fillStyle = `rgba(235,248,255,${0.9 * (1 - q)})`;
+        ctx.beginPath();
+        ctx.arc(sx, sy - 5 * Math.sin(q * Math.PI), 2.4 * (1 - q * 0.5), 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // 落地后荡开的涟漪圈
+        const q = (p - 0.35) / 0.65;
+        ctx.strokeStyle = `rgba(225,242,255,${0.75 * (1 - q)})`;
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.ellipse(sx, sy, 7 * q + 1, (7 * q + 1) * 0.55, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   },
 
   // 水面特效层：云朵倒影 + 涟漪，都裁剪在水格内
@@ -213,9 +242,10 @@ const Effects = {
       fx.fillRect(0, 0, this.fxCanvas.width, this.fxCanvas.height);
     }
 
-    // 3. 涟漪圈画进特效层
+    // 3. 涟漪圈画进特效层（只画水面涟漪；陆地溅落单独直绘）
     fx.strokeStyle = 'rgba(235,245,255,1)';
     for (const r of this.ripples) {
+      if (r.land) continue;
       const p = r.t / r.life;
       const sx = r.x - Render.camX, sy = r.y - Render.camY;
       fx.globalAlpha = (1 - p) * 0.55;
