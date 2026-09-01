@@ -157,26 +157,27 @@ const Effects = {
     }
 
     // 2. 特效层：漂移的天空倒影（AI 天空贴图优先，程序云朵兜底）
-    //    倒影锚定世界坐标（系数 1.0）：人走过去云影留在原地，不跟着人跑；
-    //    云自身的漂移只随时间缓慢进行
+    //    倒影锚定世界坐标：屏幕点 S 看到的纹理坐标 = 世界坐标 W + 时间漂移
+    //    → 绘制偏移 = -(camX + t)，人走过去云影留在原地
     const fx = this.fxCanvas.getContext('2d');
     fx.clearRect(0, 0, this.fxCanvas.width, this.fxCanvas.height);
-    const driftX = (Render.camX + time * 0.02) % 1024;
-    const driftY = (Render.camY + time * 0.013) % 1024;
+    const T = 1024; // 贴图平铺尺寸
+    const bx = -((((Render.camX + time * 0.02) % T) + T) % T) ;           // ∈ (-T, 0]
+    const by = -((((Render.camY + time * 0.013) % T) + T) % T);           // ∈ (-T, 0]
     const sky = this.skyImg;
     if (sky && sky.complete && sky.naturalWidth) {
       // AI 天空贴图：半透明铺在水面 = 天空倒影，水面纹理隐约透出
       fx.globalAlpha = 0.68;
-      for (let ox = -1; ox <= 1; ox++) {
-        for (let oy = -1; oy <= 1; oy++) {
-          fx.drawImage(sky, driftX - 1024 * ox, driftY - 1024 * oy);
+      for (let ox = 0; ox <= 2; ox++) {
+        for (let oy = 0; oy <= 2; oy++) {
+          fx.drawImage(sky, bx + ox * T, by + oy * T);
         }
       }
       fx.globalAlpha = 1;
     } else {
-      for (let ox = -1; ox <= 1; ox++) {
-        for (let oy = -1; oy <= 1; oy++) {
-          fx.drawImage(this.cloudCanvas, driftX - 1024 * ox, driftY - 1024 * oy);
+      for (let ox = 0; ox <= 2; ox++) {
+        for (let oy = 0; oy <= 2; oy++) {
+          fx.drawImage(this.cloudCanvas, bx + ox * T, by + oy * T);
         }
       }
       fx.fillStyle = 'rgba(150,205,255,.28)';
