@@ -157,10 +157,12 @@ const Effects = {
     }
 
     // 2. 特效层：漂移的天空倒影（AI 天空贴图优先，程序云朵兜底）
+    //    倒影锚定世界坐标（系数 1.0）：人走过去云影留在原地，不跟着人跑；
+    //    云自身的漂移只随时间缓慢进行
     const fx = this.fxCanvas.getContext('2d');
     fx.clearRect(0, 0, this.fxCanvas.width, this.fxCanvas.height);
-    const driftX = (Render.camX * 0.25 + time * 0.012) % 1024;
-    const driftY = (Render.camY * 0.25 + time * 0.008) % 1024;
+    const driftX = (Render.camX + time * 0.02) % 1024;
+    const driftY = (Render.camY + time * 0.013) % 1024;
     const sky = this.skyImg;
     if (sky && sky.complete && sky.naturalWidth) {
       // AI 天空贴图：半透明铺在水面 = 天空倒影，水面纹理隐约透出
