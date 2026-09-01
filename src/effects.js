@@ -6,7 +6,8 @@
 //   4. 玩家走近水边：水面荡开涟漪圈
 
 const Effects = {
-  cloudCanvas: null,     // 天空云朵图（可平铺）
+  cloudCanvas: null,     // 程序生成的备用云朵图（可平铺）
+  skyImg: null,          // AI 生成的天空云层贴图（优先使用）
   maskCanvas: null,      // 离屏画布：先把水面区域抠出来，再把云"印"进去
   ripples: [],           // 涟漪池 {x, y, t, life, max}（世界像素坐标）
   streaks: [],           // 雨丝（屏幕坐标）
@@ -38,6 +39,11 @@ const Effects = {
       }
     }
     this.cloudCanvas = c;
+
+    // ---- AI 天空贴图：加载成功后替代程序云朵 ----
+    const sky = new Image();
+    sky.src = 'assets/天空云影-裁剪.jpeg';
+    this.skyImg = sky;
 
     // ---- 水面蒙版画布（屏幕大小）----
     const m = document.createElement('canvas');
@@ -150,18 +156,30 @@ const Effects = {
       }
     }
 
-    // 2. 特效层：先画漂移的云影 + 天空色调
+    // 2. 特效层：漂移的天空倒影（AI 天空贴图优先，程序云朵兜底）
     const fx = this.fxCanvas.getContext('2d');
     fx.clearRect(0, 0, this.fxCanvas.width, this.fxCanvas.height);
     const driftX = (Render.camX * 0.25 + time * 0.012) % 1024;
     const driftY = (Render.camY * 0.25 + time * 0.008) % 1024;
-    for (let ox = -1; ox <= 1; ox++) {
-      for (let oy = -1; oy <= 1; oy++) {
-        fx.drawImage(this.cloudCanvas, driftX - 1024 * ox, driftY - 1024 * oy);
+    const sky = this.skyImg;
+    if (sky && sky.complete && sky.naturalWidth) {
+      // AI 天空贴图：半透明铺在水面 = 天空倒影，水面纹理隐约透出
+      fx.globalAlpha = 0.68;
+      for (let ox = -1; ox <= 1; ox++) {
+        for (let oy = -1; oy <= 1; oy++) {
+          fx.drawImage(sky, driftX - 1024 * ox, driftY - 1024 * oy);
+        }
       }
+      fx.globalAlpha = 1;
+    } else {
+      for (let ox = -1; ox <= 1; ox++) {
+        for (let oy = -1; oy <= 1; oy++) {
+          fx.drawImage(this.cloudCanvas, driftX - 1024 * ox, driftY - 1024 * oy);
+        }
+      }
+      fx.fillStyle = 'rgba(150,205,255,.28)';
+      fx.fillRect(0, 0, this.fxCanvas.width, this.fxCanvas.height);
     }
-    fx.fillStyle = 'rgba(150,205,255,.28)';
-    fx.fillRect(0, 0, this.fxCanvas.width, this.fxCanvas.height);
 
     // 3. 涟漪圈画进特效层
     fx.strokeStyle = 'rgba(235,245,255,1)';
