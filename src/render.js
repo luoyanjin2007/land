@@ -1,12 +1,19 @@
-// 渲染：把世界和人物画到画布上（含镜头跟随、小地图、贴图、波光、阴影）
+// 渲染：分块缓存渲染（静态地形/建筑预渲染成 chunk，动态层单独画）
+//
+// 性能设计：
+//   - 地面 + 建筑 + 水格静态外观 → 16×16 格的 chunk 画布，只渲染一次，按需缓存
+//   - 水格形状（蒙版用）同样按 chunk 缓存
+//   - 每帧动态的只有：云影/涟漪（特效层）、水珠溅落、人物、雨丝、HUD
+//   - 缓存有上限，走远后自动淘汰重建
 
 const Render = {
   canvas: null, ctx: null,
-  camX: 0, camY: 0,            // 镜头左上角的像素坐标
-  miniCanvas: null,            // 全地图小地图（预渲染一次）
+  camX: 0, camY: 0,
+  miniCanvas: null,
   sprites: {},                 // 贴图缓存 name -> Image
+  chunkCache: new Map(),       // 地形 chunk 缓存 "cx,cy" -> canvas
+  maskCache: new Map(),        // 水格形状缓存 "cx,cy" -> canvas
 
-  // 各地形的基础色
   COLORS: {
     [TILE_TYPE.WATER]: '#1e5588',
     [TILE_TYPE.SAND]: '#d9c47a',
@@ -20,7 +27,6 @@ const Render = {
     [TILE_TYPE.FOUNTAIN]: '#9fc4d8',
   },
 
-  // 需要预加载的贴图（tools/slice.js 切出来的）
   SPRITE_LIST: [
     'player-down-0', 'player-down-1', 'player-down-2', 'player-down-3',
     'player-up-0', 'player-up-1', 'player-up-2', 'player-up-3',
@@ -32,7 +38,6 @@ const Render = {
     'tile-wall-top',
   ],
 
-  // 地形 → 地面瓷砖（数组表示随机变体，按坐标哈希选取）
   TILE_IMG: {
     [TILE_TYPE.WATER]: ['tile-water'],
     [TILE_TYPE.SAND]: ['tile-sand'],
@@ -55,7 +60,6 @@ const Render = {
     this.snapCamera();
   },
 
-  // 异步预加载贴图；没加载完时先用色块/emoji 兜底
   loadSprites() {
     for (const name of this.SPRITE_LIST) {
       const img = new Image();
@@ -64,12 +68,20 @@ const Render = {
     }
   },
 
+  // 所有贴图就绪后才允许渲染（否则会把残缺画面烤进 chunk 缓存）
+  spritesReady() {
+    return this.SPRITE_LIST.every(n => {
+      const img = this.sprites[n];
+      return img && img.complete && img.naturalWidth > 0;
+    });
+  },
+
   resize() {
     this.canvas.width = innerWidth;
     this.canvas.height = innerHeight;
   },
 
-  // 小地图：把 200x200 的世界压成一张小图，只画一次
+  // 小地图：把整个世界压成一张小图，只画一次
   bakeMinimap() {
     const c = document.createElement('canvas');
     c.width = CONFIG.MAP_W; c.height = CONFIG.MAP_H;
@@ -83,7 +95,6 @@ const Render = {
     this.miniCanvas = c;
   },
 
-  // 开局镜头直接对准人物（不做平滑飞行）
   snapCamera() {
     this.camX = Player.x - this.canvas.width / 2;
     this.camY = Player.y - this.canvas.height / 2;
@@ -97,7 +108,6 @@ const Render = {
     this.camY = Math.max(0, Math.min(maxY, this.camY));
   },
 
-  // 每帧：镜头平滑跟随人物
   updateCamera(dt) {
     const targetX = Player.x - this.canvas.width / 2;
     const targetY = Player.y - this.canvas.height / 2;
@@ -107,128 +117,187 @@ const Render = {
     this.clampCamera();
   },
 
+  // ---------- chunk 缓存 ----------
+
+  key(cx, cy) { return cx + ',' + cy; },
+
+  // 淘汰离当前镜头太远的缓存，控制内存
+  evictFar(map, ccx, ccy, keep = 5) {
+    if (map.size <= 60) return;
+    for (const k of map.keys()) {
+      const [cx, cy] = k.split(',').map(Number);
+      if (Math.abs(cx - ccx) > keep || Math.abs(cy - ccy) > keep) map.delete(k);
+    }
+  },
+
+  // 取（或渲染）一个 16×16 格的静态地形 chunk
+  getChunk(cx, cy) {
+    const k = this.key(cx, cy);
+    let c = this.chunkCache.get(k);
+    if (c) return c;
+    c = document.createElement('canvas');
+    const S = CONFIG.CHUNK_PX;
+    c.width = c.height = S;
+    const g = c.getContext('2d');
+    for (let y = 0; y < CONFIG.CHUNK_TILES; y++) {
+      for (let x = 0; x < CONFIG.CHUNK_TILES; x++) {
+        const wx = cx * CONFIG.CHUNK_TILES + x, wy = cy * CONFIG.CHUNK_TILES + y;
+        if (!World.inBounds(wx, wy)) continue;
+        const sx = x * CONFIG.TILE, sy = y * CONFIG.TILE;
+        this.drawGroundInto(g, wx, wy, sx, sy);
+        this.drawPropsInto(g, wx, wy, sx, sy);
+      }
+    }
+    this.evictFar(this.chunkCache, cx, cy);
+    this.chunkCache.set(k, c);
+    return c;
+  },
+
+  // 取（或渲染）一个 chunk 的水格形状（白色 = 水），供特效层裁剪
+  getWaterMask(cx, cy) {
+    const k = this.key(cx, cy);
+    let c = this.maskCache.get(k);
+    if (c) return c;
+    c = document.createElement('canvas');
+    c.width = c.height = CONFIG.CHUNK_PX;
+    const g = c.getContext('2d');
+    g.fillStyle = '#fff';
+    for (let y = 0; y < CONFIG.CHUNK_TILES; y++) {
+      for (let x = 0; x < CONFIG.CHUNK_TILES; x++) {
+        const wx = cx * CONFIG.CHUNK_TILES + x, wy = cy * CONFIG.CHUNK_TILES + y;
+        if (World.inBounds(wx, wy) && World.tiles[wy][wx] === TILE_TYPE.WATER) {
+          g.fillRect(x * CONFIG.TILE, y * CONFIG.TILE, CONFIG.TILE, CONFIG.TILE);
+        }
+      }
+    }
+    this.evictFar(this.maskCache, cx, cy);
+    this.maskCache.set(k, c);
+    return c;
+  },
+
+  // ---------- 每帧绘制 ----------
+
   draw(time) {
     const { ctx, canvas } = this;
+
+    // 贴图没加载完时只显示加载提示（避免残缺画面烤进缓存）
+    if (!this.spritesReady()) {
+      ctx.fillStyle = '#0a1a2e';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#9ab';
+      ctx.font = '16px "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('素材加载中…', canvas.width / 2, canvas.height / 2);
+      return;
+    }
+
     ctx.fillStyle = '#0a1a2e';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // 只画镜头可见范围内的格子
-    const x0 = Math.max(0, Math.floor(this.camX / CONFIG.TILE));
-    const y0 = Math.max(0, Math.floor(this.camY / CONFIG.TILE));
-    const x1 = Math.min(CONFIG.MAP_W, Math.ceil((this.camX + canvas.width) / CONFIG.TILE));
-    const y1 = Math.min(CONFIG.MAP_H, Math.ceil((this.camY + canvas.height) / CONFIG.TILE));
+    // 可见范围覆盖到的 chunk
+    const S = CONFIG.CHUNK_PX;
+    const cx0 = Math.max(0, Math.floor(this.camX / S));
+    const cy0 = Math.max(0, Math.floor(this.camY / S));
+    const cx1 = Math.floor((this.camX + canvas.width) / S);
+    const cy1 = Math.floor((this.camY + canvas.height) / S);
 
-    // 第一遍：画地面（草/沙/路/水/广场等平面元素）
-    for (let y = y0; y < y1; y++) {
-      for (let x = x0; x < x1; x++) {
-        this.drawGround(x, y, time);
+    // 一遍贴上所有静态 chunk（地形 + 树 + 建筑）
+    for (let cy = cy0; cy <= cy1; cy++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        if (cx * CONFIG.CHUNK_TILES >= CONFIG.MAP_W || cy * CONFIG.CHUNK_TILES >= CONFIG.MAP_H) continue;
+        ctx.drawImage(this.getChunk(cx, cy), cx * S - this.camX, cy * S - this.camY);
       }
     }
-    // 1.5 遍：水面特效层（云朵倒影 + 水面涟漪，裁剪在水格内）+ 雨滴溅起的水珠
-    Effects.drawWaterFX(x0, y0, x1, y1, time);
+
+    // 动态层：水面特效（云影 + 水面涟漪）、雨珠溅落
+    Effects.drawWaterFX(cx0, cy0, cx1, cy1, time);
     Effects.drawSplashes();
-    // 第二遍：画立起来的建筑/树（保证树冠能盖住上一行的地面）
-    for (let y = y0; y < y1; y++) {
-      for (let x = x0; x < x1; x++) {
-        this.drawProps(x, y);
-      }
-    }
-    // 第三遍：人物（最上层）
+
+    // 人物
     this.drawPlayer(time);
 
-    // 雨丝（屏幕空间，盖在最上面）
+    // 雨丝
     Effects.drawRain();
 
     this.drawMinimap();
     this.drawHUD();
   },
 
-  // 坐标哈希：同一个格子永远得到同一个随机数（确定性随机）
+  // 坐标哈希：同一个格子永远得到同一个随机数
   hash(x, y) {
     let h = (x * 374761393 + y * 668265263) | 0;
     h = (h ^ (h >> 13)) * 1274126177 | 0;
     return ((h ^ (h >> 16)) >>> 0) / 4294967296;
   },
 
-  drawGround(x, y, time) {
-    const { ctx } = this;
-    const t = World.tiles[y][x];
-    const sx = x * CONFIG.TILE - this.camX;
-    const sy = y * CONFIG.TILE - this.camY;
-    const jitter = ((x * 7 + y * 13) % 5) * 2 - 4;
-    // 底色先铺（贴图未加载时的兜底）
-    ctx.fillStyle = this.shade(this.COLORS[t], jitter);
-    ctx.fillRect(sx, sy, CONFIG.TILE, CONFIG.TILE);
+  // 静态地面：画进 chunk（world 坐标 wx,wy → chunk 内像素 sx,sy）
+  drawGroundInto(g, wx, wy, sx, sy) {
+    const t = World.tiles[wy][wx];
+    const jitter = ((wx * 7 + wy * 13) % 5) * 2 - 4;
+    g.fillStyle = this.shade(this.COLORS[t], jitter);
+    g.fillRect(sx, sy, CONFIG.TILE, CONFIG.TILE);
 
-    // 铺 AI 瓷砖：同一格永远用同一张变体
     const imgs = this.TILE_IMG[t];
     if (imgs) {
-      const name = imgs[Math.floor(this.hash(x, y) * imgs.length)];
-      this.blitTile(name, sx, sy);
+      const name = imgs[Math.floor(this.hash(wx, wy) * imgs.length)];
+      const img = this.sprites[name];
+      if (img && img.complete && img.naturalWidth) {
+        g.drawImage(img, sx, sy, CONFIG.TILE, CONFIG.TILE);
+      }
     }
 
     if (t === TILE_TYPE.WATER) {
-      // 波光：亮度随时间正弦流动
-      const wave = Math.sin(time / 600 + x * 0.8 + y * 1.3) * 6;
-      ctx.fillStyle = `rgba(255,255,255,${0.05 + Math.max(0, wave) * 0.012})`;
-      ctx.fillRect(sx, sy, CONFIG.TILE, CONFIG.TILE);
-      // 岸线：挨着陆地的边画一道浅色泡沫
-      ctx.fillStyle = 'rgba(220,240,255,.45)';
-      if (World.tileAt(x, y - 1) !== TILE_TYPE.WATER) ctx.fillRect(sx, sy, CONFIG.TILE, 3);
-      if (World.tileAt(x, y + 1) !== TILE_TYPE.WATER) ctx.fillRect(sx, sy + CONFIG.TILE - 3, CONFIG.TILE, 3);
-      if (World.tileAt(x - 1, y) !== TILE_TYPE.WATER) ctx.fillRect(sx, sy, 3, CONFIG.TILE);
-      if (World.tileAt(x + 1, y) !== TILE_TYPE.WATER) ctx.fillRect(sx + CONFIG.TILE - 3, sy, 3, CONFIG.TILE);
+      // 岸线泡沫：挨着陆地的边（静态，烤进 chunk）
+      g.fillStyle = 'rgba(220,240,255,.45)';
+      if (World.tileAt(wx, wy - 1) !== TILE_TYPE.WATER) g.fillRect(sx, sy, CONFIG.TILE, 3);
+      if (World.tileAt(wx, wy + 1) !== TILE_TYPE.WATER) g.fillRect(sx, sy + CONFIG.TILE - 3, CONFIG.TILE, 3);
+      if (World.tileAt(wx - 1, wy) !== TILE_TYPE.WATER) g.fillRect(sx, sy, 3, CONFIG.TILE);
+      if (World.tileAt(wx + 1, wy) !== TILE_TYPE.WATER) g.fillRect(sx + CONFIG.TILE - 3, sy, 3, CONFIG.TILE);
+    }
+    else if (t === TILE_TYPE.SAND) {
+      if (this.hash(wx, wy) < 0.4) {
+        g.fillStyle = 'rgba(0,0,0,.08)';
+        g.fillRect(sx + 8 + this.hash(wx + 3, wy) * 16, sy + 8 + this.hash(wx, wy + 3) * 16, 2, 2);
+      }
     }
     else if (t === TILE_TYPE.MOUNTAIN) {
-      // 山体：深色棱线营造起伏
-      ctx.fillStyle = 'rgba(0,0,0,.18)';
-      ctx.beginPath();
-      ctx.moveTo(sx + 4, sy + CONFIG.TILE - 4);
-      ctx.lineTo(sx + CONFIG.TILE / 2 + jitter, sy + 6);
-      ctx.lineTo(sx + CONFIG.TILE - 4, sy + CONFIG.TILE - 4);
-      ctx.closePath();
-      ctx.fill();
+      g.fillStyle = 'rgba(0,0,0,.18)';
+      g.beginPath();
+      g.moveTo(sx + 4, sy + CONFIG.TILE - 4);
+      g.lineTo(sx + CONFIG.TILE / 2 + jitter, sy + 6);
+      g.lineTo(sx + CONFIG.TILE - 4, sy + CONFIG.TILE - 4);
+      g.closePath();
+      g.fill();
     }
   },
 
-  // 满格铺瓷砖贴图（加载失败时静默跳过，露出底色）
-  blitTile(name, sx, sy) {
-    const img = this.sprites[name];
-    if (img && img.complete && img.naturalWidth) {
-      this.ctx.drawImage(img, sx, sy, CONFIG.TILE, CONFIG.TILE);
-    }
-  },
-
-  // 建筑与树木：贴图锚定在格子底部中央，比格子略大，制造高度感
-  drawProps(x, y) {
-    const { ctx } = this;
-    const t = World.tiles[y][x];
-    const sx = x * CONFIG.TILE - this.camX;
-    const sy = y * CONFIG.TILE - this.camY;
+  // 静态建筑与树木：画进 chunk
+  drawPropsInto(g, wx, wy, sx, sy) {
+    const t = World.tiles[wy][wx];
     const cx = sx + CONFIG.TILE / 2;
-    const by = sy + CONFIG.TILE; // 格子底边
+    const by = sy + CONFIG.TILE;
 
     if (t === TILE_TYPE.FOREST) {
-      // 树的大小带确定性抖动，森林更自然
-      const size = 30 + this.hash(x, y) * 12;
-      this.shadow(cx, by - 3, size * 0.3);
-      this.blit('tree-2', cx, by - 2, size * 0.8, size);
+      const size = 30 + this.hash(wx, wy) * 12;
+      this.shadowOn(g, cx, by - 3, size * 0.3);
+      this.blitOn(g, 'tree-2', cx, by - 2, size * 0.8, size);
     }
     else if (t === TILE_TYPE.HOUSE) {
-      // 少数房子画成中式木楼，其余是白墙红瓦小屋
-      const isPagoda = this.hash(x, y) > 0.86;
-      this.shadow(cx, by - 2, 14);
-      if (isPagoda) this.blit('pagoda-2', cx, by - 2, 42, 46);
-      else this.blit('house-2', cx, by - 2, 42, 42);
+      const isPagoda = this.hash(wx, wy) > 0.86;
+      this.shadowOn(g, cx, by - 2, 14);
+      if (isPagoda) this.blitOn(g, 'pagoda-2', cx, by - 2, 42, 46);
+      else this.blitOn(g, 'house-2', cx, by - 2, 42, 42);
+    }
+    else if (t === TILE_TYPE.WALL) {
+      this.blitOn(g, 'tile-wall-top', sx, sy, CONFIG.TILE, CONFIG.TILE);
     }
     else if (t === TILE_TYPE.FOUNTAIN) {
-      this.blit('fountain', cx, by - 2, 40, 40);
+      this.blitOn(g, 'fountain', cx, by - 2, 40, 40);
     }
   },
 
   drawPlayer(time) {
     const { ctx } = this;
-    // 四方向贴图：朝向-帧号；静止用 0 号站立帧，行走循环 1~3 帧
     let name;
     if (!Player.moving) {
       name = `player-${Player.facing}-0`;
@@ -238,7 +307,6 @@ const Render = {
     }
     const img = this.sprites[name];
 
-    // 影子
     this.shadow(Player.x - this.camX, Player.y - this.camY + 12, 9);
 
     const h = 40, w = img && img.naturalWidth ? h * img.naturalWidth / img.naturalHeight : 24;
@@ -247,7 +315,6 @@ const Render = {
     if (img && img.complete && img.naturalWidth) {
       ctx.drawImage(img, -w / 2, -h / 2, w, h);
     } else {
-      // 贴图未就绪的兜底
       ctx.font = '26px serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -256,24 +323,23 @@ const Render = {
     ctx.restore();
   },
 
-  // 画椭圆影子
+  // 影子 / 贴图 的双版本：主画布用，chunk 画布也用
   shadow(cx, cy, r) {
-    const { ctx } = this;
-    ctx.fillStyle = 'rgba(0,0,0,.25)';
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, r, r * 0.4, 0, 0, Math.PI * 2);
-    ctx.fill();
+    this.shadowOn(this.ctx, cx, cy, r);
   },
-
-  // 按名字画贴图：以 (cx, bottom) 为锚点，缩放到指定大小
-  blit(name, cx, bottom, w, h) {
+  shadowOn(g, cx, cy, r) {
+    g.fillStyle = 'rgba(0,0,0,.25)';
+    g.beginPath();
+    g.ellipse(cx, cy, r, r * 0.4, 0, 0, Math.PI * 2);
+    g.fill();
+  },
+  blitOn(g, name, cx, bottom, w, h) {
     const img = this.sprites[name];
     if (img && img.complete && img.naturalWidth) {
-      this.ctx.drawImage(img, cx - w / 2, bottom - h, w, h);
+      g.drawImage(img, cx - w / 2, bottom - h, w, h);
     }
   },
 
-  // 左上角小地图：全貌 + 人物位置红点
   drawMinimap() {
     const size = 160;
     const pad = 10;
@@ -308,7 +374,6 @@ const Render = {
     );
   },
 
-  // 颜色明暗调整
   shade(hex, amt) {
     const n = parseInt(hex.slice(1), 16);
     const r = Math.max(0, Math.min(255, (n >> 16) + amt));

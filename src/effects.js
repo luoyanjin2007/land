@@ -157,6 +157,21 @@ const Effects = {
     this.skyFeather = c;
   },
 
+  // 把羽化天空贴图预拼成 3×3 大图（每帧只需一次源矩形绘制，性能优化）
+  buildSkyTiled() {
+    if (!this.skyFeather) this.buildFeatheredSky();
+    const T = 1024;
+    const c = document.createElement('canvas');
+    c.width = T * 3; c.height = T * 3;
+    const g = c.getContext('2d');
+    for (let j = 0; j < 3; j++) {
+      for (let i = 0; i < 3; i++) {
+        g.drawImage(this.skyFeather, i * T, j * T);
+      }
+    }
+    this.skyTiled = c;
+  },
+
   spawnRipple(wx, wy, max, life, land) {    // 池上限防爆
     if (this.ripples.length > 320) this.ripples.shift();
     this.ripples.push({ x: wx, y: wy, t: 0, life, max, land: !!land });
@@ -181,46 +196,42 @@ const Effects = {
   },
 
   // 水面特效层：云朵倒影 + 涟漪，都裁剪在水格内
-  // 在地面层之后、建筑层之前调用
-  drawWaterFX(x0, y0, x1, y1, time) {
-    const { ctx } = Render;
+  // 参数是可见的 chunk 范围（蒙版由 chunk 缓存拼装，性能优化）
+  drawWaterFX(cx0, cy0, cx1, cy1, time) {
+    const { ctx, canvas } = Render;
+    const S = CONFIG.CHUNK_PX;
 
-    // 1. 蒙版层：把可见的水格填成不透明形状（只当裁剪用）
+    // 1. 蒙版层：可见 chunk 的水格形状拼贴（每帧十几次 blit，替代上千次 fillRect）
     const mask = this.maskCanvas.getContext('2d');
     mask.clearRect(0, 0, this.maskCanvas.width, this.maskCanvas.height);
-    mask.fillStyle = '#fff';
-    for (let y = y0; y < y1; y++) {
-      for (let x = x0; x < x1; x++) {
-        if (World.tiles[y][x] !== TILE_TYPE.WATER) continue;
-        mask.fillRect(
-          x * CONFIG.TILE - Render.camX,
-          y * CONFIG.TILE - Render.camY,
-          CONFIG.TILE, CONFIG.TILE
-        );
+    for (let cy = cy0; cy <= cy1; cy++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        mask.drawImage(Render.getWaterMask(cx, cy), cx * S - Render.camX, cy * S - Render.camY);
       }
     }
 
     // 2. 特效层：漂移的天空倒影（AI 天空贴图优先，程序云朵兜底）
     //    倒影锚定世界坐标：屏幕点 S 看到的纹理坐标 = 世界坐标 W + 时间漂移
-    //    → 绘制偏移 = -(camX + t)，人走过去云影留在原地
+    //    → 源矩形偏移 = +(camX + t)（mod 平铺尺寸），人走过去云影留在原地
     const fx = this.fxCanvas.getContext('2d');
     fx.clearRect(0, 0, this.fxCanvas.width, this.fxCanvas.height);
     const T = 1024; // 贴图平铺尺寸
-    const bx = -((((Render.camX + time * 0.02) % T) + T) % T) ;           // ∈ (-T, 0]
-    const by = -((((Render.camY + time * 0.013) % T) + T) % T);           // ∈ (-T, 0]
+    const sx = (((Render.camX + time * 0.02) % T) + T) % T;
+    const sy = (((Render.camY + time * 0.013) % T) + T) % T;
     const sky = this.skyImg;
     if (sky && sky.complete && sky.naturalWidth) {
-      // AI 天空贴图：四边羽化后平铺——云飘到贴图边缘前淡出，
-      // 既不会被切断"缺角"，也不会镜像融合成对称大云
-      if (!this.skyFeather) this.buildFeatheredSky();
+      // AI 天空贴图：四边羽化 + 预拼成大图，单次源矩形绘制（性能优）
+      if (!this.skyTiled) this.buildSkyTiled();
       fx.globalAlpha = 0.68;
-      for (let ox = 0; ox <= 2; ox++) {
-        for (let oy = 0; oy <= 2; oy++) {
-          fx.drawImage(this.skyFeather, bx + ox * T, by + oy * T);
-        }
-      }
+      fx.drawImage(
+        this.skyTiled,
+        sx, sy, Math.min(canvas.width, this.skyTiled.width - sx), Math.min(canvas.height, this.skyTiled.height - sy),
+        0, 0, Math.min(canvas.width, this.skyTiled.width - sx), Math.min(canvas.height, this.skyTiled.height - sy)
+      );
       fx.globalAlpha = 1;
     } else {
+      // 程序云朵兜底：3×3 平铺
+      const bx = -sx, by = -sy;
       for (let ox = 0; ox <= 2; ox++) {
         for (let oy = 0; oy <= 2; oy++) {
           fx.drawImage(this.cloudCanvas, bx + ox * T, by + oy * T);
@@ -238,10 +249,10 @@ const Effects = {
       const p = r.t / r.life;
       if (p < 0.35) continue;
       const q = (p - 0.35) / 0.65;
-      const sx = r.x - Render.camX, sy = r.y - Render.camY;
+      const px = r.x - Render.camX, py = r.y - Render.camY;
       fx.globalAlpha = (1 - q) * 0.55;
       fx.beginPath();
-      fx.ellipse(sx, sy, r.max * (0.3 + 0.7 * q) + 1, (r.max * (0.3 + 0.7 * q) + 1) * 0.55, 0, 0, Math.PI * 2);
+      fx.ellipse(px, py, r.max * (0.3 + 0.7 * q) + 1, (r.max * (0.3 + 0.7 * q) + 1) * 0.55, 0, 0, Math.PI * 2);
       fx.stroke();
     }
     fx.globalAlpha = 1;

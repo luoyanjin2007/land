@@ -6,6 +6,8 @@ const CONFIG = {
   PLAYER_SPEED: 170, // 步行速度（像素/秒）
   RUN_SPEED: 280,    // 按住 Shift 的奔跑速度
   PLAYER_SIZE: 20,   // 人物碰撞箱（像素，正方形）
+  CHUNK_TILES: 16,   // 每个缓存分块的边长（格）
+  CHUNK_PX: 512,     // 分块像素尺寸 = CHUNK_TILES × TILE
 };
 
 // 地形类型编号
