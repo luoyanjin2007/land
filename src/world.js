@@ -174,11 +174,11 @@ const World = {
     return x >= 0 && y >= 0 && x < CONFIG.MAP_W && y < CONFIG.MAP_H;
   },
 
-  // 是否可通行：水、山、房屋、城墙、喷泉不能走
+  // 是否可通行：山、房屋、城墙、喷泉不能走；水可以游泳通过
   walkable(x, y) {
     if (!this.inBounds(x, y)) return false;
     const t = this.tiles[y][x];
-    return t !== TILE_TYPE.WATER && t !== TILE_TYPE.MOUNTAIN &&
+    return t !== TILE_TYPE.MOUNTAIN &&
            t !== TILE_TYPE.HOUSE && t !== TILE_TYPE.WALL &&
            t !== TILE_TYPE.FOUNTAIN;
   },

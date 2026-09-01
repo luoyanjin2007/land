@@ -306,12 +306,21 @@ const Render = {
       name = `player-${Player.facing}-${frame}`;
     }
     const img = this.sprites[name];
+    const swimming = Player.inWater;
 
-    this.shadow(Player.x - this.camX, Player.y - this.camY + 12, 9);
+    // 陆上有影子；水里没有影子，靠水面覆盖表现浸入感
+    if (!swimming) this.shadow(Player.x - this.camX, Player.y - this.camY + 12, 9);
 
-    const h = 40, w = img && img.naturalWidth ? h * img.naturalWidth / img.naturalHeight : 24;
+    // 游泳时体型略小、整体下沉，并带轻微浮沉起伏
+    const h = swimming ? 30 : 40;
+    const w = img && img.naturalWidth ? h * img.naturalWidth / img.naturalHeight : 24;
+    const bob = swimming
+      ? Math.sin(time / 320) * 1.6
+      : (Player.moving ? Math.sin(time / 90) * 2 : 0);
+    const sink = swimming ? 8 : 0;
+
     ctx.save();
-    ctx.translate(Player.x - this.camX, Player.y - this.camY + 20 - h / 2);
+    ctx.translate(Player.x - this.camX, Player.y - this.camY + 20 - h / 2 + sink + bob);
     if (img && img.complete && img.naturalWidth) {
       ctx.drawImage(img, -w / 2, -h / 2, w, h);
     } else {
@@ -319,6 +328,18 @@ const Render = {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('🧍', 0, 0);
+    }
+    // 水面覆盖：半透明水色盖住下半身 + 一条白色水线（只在游泳时）
+    if (swimming) {
+      ctx.fillStyle = 'rgba(45,95,145,.45)';
+      ctx.beginPath();
+      ctx.ellipse(0, h * 0.34, w * 0.56, h * 0.26, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(225,242,255,.5)';
+      ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      ctx.ellipse(0, h * 0.34, w * 0.56, h * 0.26, 0, Math.PI, Math.PI * 2);
+      ctx.stroke();
     }
     ctx.restore();
   },
@@ -369,6 +390,7 @@ const Render = {
     ctx.fillText(
       `位置 (${Player.tileX()}, ${Player.tileY()})  ` +
       (city ? `🏘️ ${city}  ` : '') +
+      (Player.inWater ? '🏊 游泳中  ' : '') +
       `${Input.running() ? '🏃奔跑中' : '🚶步行'}  Shift 加速`,
       180, 24
     );

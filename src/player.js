@@ -26,8 +26,10 @@ const Player = {
       this.facing = ay > 0 ? 'down' : 'up';
     }
 
-    // 斜向移动要除以 √2，否则斜着走更快
-    const speed = Input.running() ? CONFIG.RUN_SPEED : CONFIG.PLAYER_SPEED;
+    // 水里游泳：速度减半（阻力），并持续荡开涟漪
+    const wasInWater = this.inWater;
+    const speed = (Input.running() ? CONFIG.RUN_SPEED : CONFIG.PLAYER_SPEED)
+                * (this.inWater ? 0.55 : 1);
     const len = Math.hypot(ax, ay);
     const dx = (ax / len) * speed * dt;
     const dy = (ay / len) * speed * dt;
@@ -35,6 +37,23 @@ const Player = {
     // X、Y 轴分开处理碰撞：贴墙滑动而不是卡死
     this.tryMove(dx, 0);
     this.tryMove(0, dy);
+
+    // 入水瞬间：一个大圈；游泳中：身后持续小圈
+    if (this.inWater && !wasInWater) {
+      Effects.spawnRipple(this.x, this.y, 16, 1.1, false);
+      this.swimTimer = 0.2;
+    } else if (this.inWater) {
+      this.swimTimer -= dt;
+      if (this.swimTimer <= 0) {
+        this.swimTimer = 0.26;
+        Effects.spawnRipple(this.x, this.y, 11, 0.9, false);
+      }
+    }
+  },
+
+  // 当前是否在水里（游泳状态）
+  get inWater() {
+    return World.tileAt(this.tileX(), this.tileY()) === TILE_TYPE.WATER;
   },
 
   // 尝试沿某一轴移动，撞到不可行走地形就停下
