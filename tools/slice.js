@@ -218,6 +218,20 @@ async function main() {
     }
   }
 
+  // ---------- 悬崖侧面图集：4 个垂直面板（高处地形的侧立面） ----------
+  const cSrc = await Jimp.read(path.join(ROOT, 'assets', '悬崖侧面图集.jpeg'));
+  const cliffDefs = [
+    ['tile-cliff-grass', 16, 240],    // 草皮+泥土断层
+    ['tile-cliff-rock', 510, 610],    // 纯岩石峭壁（避开顶部草皮）
+    ['tile-cliff-hill', 1040, 240],   // 丘陵土坡
+    ['tile-cliff-sand', 1565, 240],   // 沙层
+  ];
+  for (const [name, px, py] of cliffDefs) {
+    const cell = cSrc.clone().crop({ x: px, y: py, w: 440, h: 512 });
+    cell.resize({ w: 110, h: 128 });
+    await cell.write(path.join(OUT, name + '.png'));
+  }
+
   console.log('完成，输出文件：');
 
   for (const f of fs.readdirSync(OUT).sort()) {

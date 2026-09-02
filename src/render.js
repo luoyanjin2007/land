@@ -12,6 +12,8 @@ const Render = {
   miniCanvas: null,
   sprites: {},                 // 贴图缓存 name -> Image
   chunkCache: new Map(),       // 地形 chunk 缓存 "cx,cy" -> canvas
+  CHUNK_HEAD: 56,              // chunk 画布顶部预留区：高处地形向上生长的空间
+  TIER: { 0: 0, 1: 1, 2: 1, 3: 1, 4: 3, 5: 1, 6: 1, 7: 1, 8: 1, 9: 1, 10: 2 }, // 地形海拔层级：WATER0 沙草林路1 丘陵2 山峰3
   maskCache: new Map(),        // 水格形状缓存 "cx,cy" -> canvas
 
   COLORS: {
@@ -42,6 +44,7 @@ const Render = {
     'tile-wall-top', 'tile-hill-1', 'tile-hill-2', 'tile-hill-3', 'tile-rock',
     'tile-forest-dark', 'tile-bamboo', 'tile-leaf', 'tile-mushroom',
     'tile-pebble', 'tile-cracked', 'tile-thick-grass', 'tile-dry-grass',
+    'tile-cliff-grass', 'tile-cliff-rock', 'tile-cliff-hill', 'tile-cliff-sand',
   ],
 
   TILE_IMG: {
@@ -147,13 +150,13 @@ const Render = {
     if (c) return c;
     c = document.createElement('canvas');
     const S = CONFIG.CHUNK_PX;
-    c.width = c.height = S;
+    c.width = S; c.height = S + this.CHUNK_HEAD;   // 顶部预留：高处地形向上生长
     const g = c.getContext('2d');
     for (let y = 0; y < CONFIG.CHUNK_TILES; y++) {
       for (let x = 0; x < CONFIG.CHUNK_TILES; x++) {
         const wx = cx * CONFIG.CHUNK_TILES + x, wy = cy * CONFIG.CHUNK_TILES + y;
         if (!World.inBounds(wx, wy)) continue;
-        const sx = x * CONFIG.TILE, sy = y * CONFIG.TILE;
+        const sx = x * CONFIG.TILE, sy = y * CONFIG.TILE + this.CHUNK_HEAD;
         this.drawGroundInto(g, wx, wy, sx, sy);
         this.drawPropsInto(g, wx, wy, sx, sy);
       }
@@ -169,8 +172,9 @@ const Render = {
     let c = this.maskCache.get(k);
     if (c) return c;
     c = document.createElement('canvas');
-    c.width = c.height = CONFIG.CHUNK_PX;
+    c.width = CONFIG.CHUNK_PX; c.height = CONFIG.CHUNK_PX + this.CHUNK_HEAD;
     const g = c.getContext('2d');
+    g.translate(0, this.CHUNK_HEAD);
     g.fillStyle = '#fff';
     for (let y = 0; y < CONFIG.CHUNK_TILES; y++) {
       for (let x = 0; x < CONFIG.CHUNK_TILES; x++) {
@@ -215,7 +219,7 @@ const Render = {
     for (let cy = cy0; cy <= cy1; cy++) {
       for (let cx = cx0; cx <= cx1; cx++) {
         if (cx * CONFIG.CHUNK_TILES >= CONFIG.WORLD_W || cy * CONFIG.CHUNK_TILES >= CONFIG.WORLD_H) continue;
-        ctx.drawImage(this.getChunk(cx, cy), cx * S - this.camX, cy * S - this.camY);
+        ctx.drawImage(this.getChunk(cx, cy), cx * S - this.camX, cy * S - this.camY - Render.CHUNK_HEAD);
       }
     }
 
