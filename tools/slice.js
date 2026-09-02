@@ -25,11 +25,12 @@ function whitenessToAlpha(img) {
 
 async function main() {
   // ---------- 角色贴图 ----------
-  // 找最大连通不透明色块（人物本体），返回其包围盒——孤立噪点全部忽略
-  function largestComponentBBox(img, alphaMin = 128) {
+  // 找所有有意义大小的连通色块（人物本体 + 被水面隔开的头部等），
+  // 返回它们的联合包围盒——只有孤立小噪点被忽略
+  function significantBBox(img, alphaMin = 128) {
     const { width: w, height: h, data } = img.bitmap;
     const visited = new Uint8Array(w * h);
-    let best = null;
+    const comps = [];
     const at = (x, y) => data[(y * w + x) * 4 + 3];
     for (let y0 = 0; y0 < h; y0++) {
       for (let x0 = 0; x0 < w; x0++) {
@@ -54,17 +55,26 @@ async function main() {
             stack.push(nx, ny);
           }
         }
-        if (!best || count > best.count) best = { minX, minY, maxX, maxY, count };
+        comps.push({ minX, minY, maxX, maxY, count });
       }
     }
-    return best;
+    if (!comps.length) return null;
+    // 只保留 >= 最大块 5% 的色块（游泳帧的头部与身体被水面隔开，都要保留）
+    const largest = Math.max(...comps.map(c => c.count));
+    const keep = comps.filter(c => c.count >= largest * 0.05);
+    return {
+      minX: Math.min(...keep.map(c => c.minX)),
+      minY: Math.min(...keep.map(c => c.minY)),
+      maxX: Math.max(...keep.map(c => c.maxX)),
+      maxY: Math.max(...keep.map(c => c.maxY)),
+    };
   }
 
-  // 从一张图里切一帧：去白底 -> 只留最大色块 -> 裁到包围盒
+  // 从一张图里切一帧：去白底 -> 保留有意义的色块 -> 裁到联合包围盒
   async function cutFrame(src, x, y, w, h) {
     const cell = src.clone().crop({ x, y, w, h });
     whitenessToAlpha(cell);
-    const box = largestComponentBBox(cell);
+    const box = significantBBox(cell);
     if (!box) throw new Error('没找到人物色块');
     const pad = 2;
     return cell.crop({
