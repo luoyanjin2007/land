@@ -221,9 +221,10 @@ const Render = {
       }
     }
 
-    // 动态层：水面特效（云影 + 水面涟漪）、雨珠溅落
+    // 动态层：水面特效（云影 + 水面涟漪）、雨珠溅落、摇曳的树
     Effects.drawWaterFX(cx0, cy0, cx1, cy1, time);
     Effects.drawSplashes();
+    this.drawTrees(time);
 
     // 人物
     this.drawPlayer(time);
@@ -306,6 +307,46 @@ const Render = {
     // 墙砖由地面层 TILE_IMG[WALL] 绘制（此前道具层错位重复绘制，已删）
     else if (t === TILE_TYPE.FOUNTAIN) {
       this.blitOn(g, 'fountain', cx, by - 2, 40, 40);
+    }
+  },
+
+  // 摇曳的树（动态绘制）：风让树轻轻摆动，人物靠近时树会弯腰让路
+  drawTrees(time) {
+    const { ctx } = this;
+    const T = CONFIG.TILE;
+    const x0 = Math.max(0, Math.floor(this.camX / T) - 1);
+    const y0 = Math.max(0, Math.floor(this.camY / T) - 1);
+    const x1 = Math.min(CONFIG.WORLD_W, Math.ceil((this.camX + innerWidth) / T) + 1);
+    const y1 = Math.min(CONFIG.WORLD_H, Math.ceil((this.camY + innerHeight) / T) + 2);
+
+    for (let wy = y0; wy < y1; wy++) {
+      for (let wx = x0; wx < x1; wx++) {
+        if (World.tileAt(wx, wy) !== TILE_TYPE.FOREST) continue;
+        const size = 30 + this.hash(wx, wy) * 12;
+        const cxp = wx * T + T / 2 - this.camX;
+        const byp = wy * T + T - this.camY;
+
+        // 风：缓慢的全局摆动（每棵树相位不同）
+        const wind = Math.sin(time / 750 + wx * 0.04 + wy * 0.02) * 1.6;
+        // 人物推移：越近弯得越厉害，方向 = 远离人物
+        const pdx = wx * T + T / 2 - Player.x;
+        const pdy = wy * T + T - Player.y;
+        const d = Math.hypot(pdx, pdy);
+        const R = 88;
+        let bend = wind;
+        if (d < R) bend += -(pdx / (d || 1)) * (1 - d / R) * 8;
+
+        const shear = bend / size;   // 顶部弯曲像素 → 剪切系数
+        this.shadowOn(ctx, cxp, byp - 3, size * 0.3);
+        ctx.save();
+        ctx.translate(cxp, byp - 2);
+        ctx.transform(1, 0, shear, 1, 0, 0);
+        const img = this.sprites['tree-2'];
+        if (img && img.complete && img.naturalWidth) {
+          ctx.drawImage(img, -size * 0.4, -size, size * 0.8, size);
+        }
+        ctx.restore();
+      }
     }
   },
 
