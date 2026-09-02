@@ -61,8 +61,27 @@ const Render = {
     this.resize();
     addEventListener('resize', () => this.resize());
     this.loadSprites();
+    this.buildBridgeTile();
     this.bakeMinimap();
     this.snapCamera();
+  },
+
+  // 程序化木桥贴图：棕色木板 + 板缝 + 木纹高光
+  buildBridgeTile() {
+    const c = document.createElement('canvas');
+    c.width = c.height = CONFIG.TILE;
+    const g = c.getContext('2d');
+    g.fillStyle = '#8a5a33';
+    g.fillRect(0, 0, 32, 32);
+    for (let i = 0; i < 4; i++) {
+      g.fillStyle = '#7a4c2a';
+      g.fillRect(0, i * 8, 32, 6);
+      g.fillStyle = 'rgba(255,220,160,.16)';
+      g.fillRect(0, i * 8, 32, 2);
+    }
+    g.fillStyle = '#6b3f22';
+    for (let i = 0; i < 5; i++) g.fillRect(i * 7 + 2, 0, 2, 32);
+    this.sprites['tile-bridge'] = c;   // canvas 可直接用于 drawImage
   },
 
   loadSprites() {
@@ -232,6 +251,29 @@ const Render = {
     // 雨丝
     Effects.drawRain();
 
+    // 昼夜循环：落叶/鸟/萤火虫（Ambience）→ 夜幕压暗 → 窗户亮灯
+    const night = Ambience.nightLevel(time);
+    Ambience.draw(time);
+    if (night > 0.02) {
+      ctx.fillStyle = `rgba(10,15,40,${night * 0.42})`;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // 窗户亮灯（夜晚才开灯，窗口位置固定在房屋上部）
+      if (night > 0.25) {
+        for (let wy = cy0; wy <= cy1; wy++) {
+          for (let wx = cx0; wx <= cx1; wx++) {
+            if (World.tileAt(wx, wy) !== TILE_TYPE.HOUSE) continue;
+            const hv = this.hash(wx, wy);
+            if (hv < 0.35) continue;   // 有些屋子没开灯
+            const sx = wx * CONFIG.TILE - this.camX;
+            const sy = wy * CONFIG.TILE - this.camY - 2;
+            ctx.fillStyle = `rgba(255,214,120,${(night - 0.2) * 1.1})`;
+            ctx.fillRect(sx + 7, sy + 6, 5, 6);
+            ctx.fillRect(sx + 20, sy + 6, 5, 6);
+          }
+        }
+      }
+    }
+
     this.drawMinimap();
     this.drawHUD();
 
@@ -254,7 +296,12 @@ const Render = {
     g.fillRect(sx, sy, CONFIG.TILE, CONFIG.TILE);
 
     const imgs = this.TILE_IMG[t];
-    if (imgs) {
+    if (t === TILE_TYPE.PATH && World.bridgeTiles && World.bridgeTiles.has(wx + ',' + wy)) {
+      // 水上的路 = 木桥
+      const b = this.sprites['tile-bridge'];
+      if (b) g.drawImage(b, sx, sy, CONFIG.TILE, CONFIG.TILE);
+    }
+    else if (imgs) {
       const name = imgs[Math.floor(this.hash(wx, wy) * imgs.length)];
       const img = this.sprites[name];
       if (img && img.complete && img.naturalWidth) {
@@ -331,6 +378,8 @@ const Render = {
         const R = 88;
         let bend = wind;
         if (d < R) bend += -(pdx / (d || 1)) * (1 - d / R) * 8;
+        // 靠得太近：惊飞一群鸟（模块内部有冷却）
+        if (d < 34) Ambience.tryScare(wx, wy, pdx, time);
 
         const shear = bend / size;   // 顶部弯曲像素 → 剪切系数
         this.shadowOn(ctx, cxp, byp - 3, size * 0.3);
@@ -342,6 +391,31 @@ const Render = {
           ctx.drawImage(img, -size * 0.4, -size, size * 0.8, size);
         }
         ctx.restore();
+      }
+    }
+
+    // 草丛：稀疏点缀在草原上，随风摆动 + 人物拨动
+    for (let wy = y0; wy < y1; wy++) {
+      for (let wx = x0; wx < x1; wx++) {
+        if (World.tileAt(wx, wy) !== TILE_TYPE.GRASS) continue;
+        const hv = this.hash(wx, wy);
+        if (hv < 0.87) continue;
+        const bx = wx * T + 4 + hv * 18 - this.camX;
+        const by = wy * T + 26 - this.camY;
+        // 风摆（草更轻，摆得更快）+ 人物拨动
+        const wind = Math.sin(time / 420 + wx * 0.09 + wy * 0.05) * 2.2;
+        const pdx = wx * T + T / 2 - Player.x, pdy = wy * T + T - Player.y;
+        const d = Math.hypot(pdx, pdy);
+        let bend = wind;
+        if (d < 56) bend += -(pdx / (d || 1)) * (1 - d / 56) * 5;
+        ctx.strokeStyle = 'rgba(46,110,50,.85)';
+        ctx.lineWidth = 1.2;
+        for (const b of [-3, 0, 3]) {
+          ctx.beginPath();
+          ctx.moveTo(bx + b, by);
+          ctx.quadraticCurveTo(bx + b + bend * 0.5, by - 5, bx + b + bend, by - 9);
+          ctx.stroke();
+        }
       }
     }
   },

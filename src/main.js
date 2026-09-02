@@ -10,7 +10,7 @@
   Render.init(document.getElementById('game'));
   Effects.init();
   WorldMap.init();
-  Player.x = 215.5 * CONFIG.TILE; Player.y = 141.5 * CONFIG.TILE; // DEBUG
+  Ambience.init();
 
   // 3. 开场画面：点击「开始探索」才接管操作
   let started = false;
@@ -27,6 +27,7 @@
     if (started) Player.update(dt);
     WorldMap.reveal(Player.x, Player.y);
     Effects.update(dt, now);
+    Ambience.update(dt, now);
     Render.updateCamera(dt);
     Render.draw(now);
     requestAnimationFrame(loop);
