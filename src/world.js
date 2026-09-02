@@ -96,32 +96,66 @@ const World = {
     return { x: cx, y: dy > 0 ? city.y + city.h - 1 : city.y };
   },
 
-  // 城际道路：贪心行走向目标推进 + 随机扰动（绕开水和山），确定性可复现
+  // 城际道路：A* 寻路（保证绕开山与水、必达终点），铺路时加随机宽度
   carveRoad(A, B, rng) {
     const start = this.gateToward(A, B);
     const goal = this.gateToward(B, A);
-    let x = start.x, y = start.y;
-    let guard = 6000;
-    while ((x !== goal.x || y !== goal.y) && guard-- > 0) {
-      this.roadTiles.add(x + ',' + y);
-      if (rng() < 0.4) this.roadTiles.add(x + ',' + (y + 1));   // 路面宽度自然变化
-      const dx = Math.sign(goal.x - x), dy = Math.sign(goal.y - y);
-      const steps = rng() < 0.35
-        ? [[dx, dy], [dx, 0], [0, dy]]
-        : [[dx, 0], [0, dy], [dx, dy]];
-      let moved = false;
-      for (const [mx, my] of steps) {
-        if (mx === 0 && my === 0) continue;
-        const nx = x + mx, ny = y + my;
+    const K = (x, y) => x + ',' + y;
+    const hEst = (x, y) => Math.abs(x - goal.x) + Math.abs(y - goal.y);
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+    const open = new Map();               // 待探索：key -> {g, f}
+    const came = new Map();               // key -> 前驱 key
+    const closed = new Set();
+    open.set(K(start.x, start.y), { g: 0, f: hEst(start.x, start.y) });
+
+    let goalKey = K(goal.x, goal.y);
+    let iter = 0;
+    while (open.size && iter++ < 60000) {
+      // 取 f 最小的节点（节点数少，线性扫足够快）
+      let bk = null, bf = Infinity;
+      for (const [k, v] of open) { if (v.f < bf) { bf = v.f; bk = k; } }
+      const cur = open.get(bk);
+      open.delete(bk);
+      closed.add(bk);
+      if (bk === goalKey) break;
+      for (const [dx, dy] of dirs) {
+        const nx = cur.x + dx, ny = cur.y + dy;
+        if (!this.inBounds(nx, ny)) continue;
+        const nk = K(nx, ny);
+        if (closed.has(nk)) continue;
         const t = this.tileAt(nx, ny);
-        if (t !== TILE_TYPE.WATER && t !== TILE_TYPE.MOUNTAIN) {
-          x = nx; y = ny; moved = true;
-          break;
+        if (t === TILE_TYPE.WATER || t === TILE_TYPE.MOUNTAIN) continue;
+        const g2 = cur.g + 1;
+        const ex = open.get(nk);
+        if (!ex || ex.g > g2) {
+          open.set(nk, { g: g2, f: g2 + hEst(nx, ny) });
+          came.set(nk, bk);
         }
       }
-      if (!moved) break;
     }
-    this.roadTiles.add(goal.x + ',' + goal.y);
+
+    // 回溯路径铺路（A* 失败时直线路径兜底）
+    const path = [];
+    let k = goalKey;
+    if (came.has(k) || K(start.x, start.y) === k) {
+      while (k && k !== K(start.x, start.y)) { path.push(k); k = came.get(k); }
+      path.push(K(start.x, start.y));
+    } else {
+      const dx = Math.sign(goal.x - start.x), dy = Math.sign(goal.y - start.y);
+      let x = start.x, y = start.y;
+      path.push(K(x, y));
+      while (x !== goal.x || y !== goal.y) {
+        if (x !== goal.x) x += dx;
+        else if (y !== goal.y) y += dy;
+        path.push(K(x, y));
+      }
+    }
+    for (const kk of path) {
+      this.roadTiles.add(kk);
+      const [px, py] = kk.split(',').map(Number);
+      if (rng() < 0.4) this.roadTiles.add(px + ',' + (py + 1));   // 路宽自然变化
+    }
   },
 
   // 生成全部城际道路（正史路线：圣魂村→诺丁城→史莱克/索托→武魂城→星罗城）
