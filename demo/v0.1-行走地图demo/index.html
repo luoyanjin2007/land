@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>斗罗大陆 · 世界行走原型</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #0a1a2e; }
+  canvas#game { display: block; }
+
+  /* 开场画面：圣魂村俯视图打底 */
+  #title {
+    position: fixed; inset: 0; z-index: 20;
+    background: url('assets/圣魂村-俯视地图.jpeg') center / cover no-repeat;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 18px;
+    text-shadow: 0 2px 8px rgba(0,0,0,.7);
+  }
+  #title.hidden { display: none; }
+  #title::before {
+    content: ''; position: absolute; inset: 0;
+    background: rgba(10, 20, 40, .45); /* 压暗底图，突出文字 */
+  }
+  #title h1, #title p, #title button { position: relative; }
+  #title h1 {
+    color: #ffe9a8; font-size: 52px; letter-spacing: 12px;
+    text-shadow: 0 3px 12px rgba(0,0,0,.85);
+  }
+  #title p { color: #e8e8e8; font-size: 15px; letter-spacing: 3px; }
+  #title button {
+    margin-top: 10px; padding: 13px 46px; font-size: 19px;
+    border: 2px solid #ffe9a8; border-radius: 30px;
+    background: rgba(20, 40, 30, .55); color: #ffe9a8;
+    cursor: pointer; letter-spacing: 6px; transition: all .2s;
+  }
+  #title button:hover { background: #7ec850; color: #14320a; border-color: #7ec850; }
+</style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="title">
+    <h1>斗罗大陆</h1>
+    <p>圣魂村外的世界 · 行走原型</p>
+    <button id="start-btn">开 始 探 索</button>
+  </div>
+
+  <!-- 按依赖顺序加载，后面的文件能用前面的（普通脚本，双击 index.html 即可运行） -->
+  <script src="src/config.js"></script>
+  <script src="src/world.js"></script>
+  <script src="src/input.js"></script>
+  <script src="src/player.js"></script>
+  <script src="src/render.js"></script>
+  <script src="src/effects.js"></script>
+  <script src="src/main.js"></script>
+</body>
+</html>
