@@ -243,16 +243,20 @@ const Effects = {
 
     // 3. 涟漪圈画进特效层：水面专属（陆地只有水珠，没有波纹）
     //    前段 0~0.35 是水珠弹起（直绘层负责），这里只画落地后的圈
+    //    扩散用 ease-out（先猛扩散再减速）——符合真实水波：
+    //    人游远了，身后的波纹也已经大幅扩散开，不会僵在原地
     fx.strokeStyle = 'rgba(235,245,255,1)';
     for (const r of this.ripples) {
       if (r.land) continue;
       const p = r.t / r.life;
       if (p < 0.35) continue;
       const q = (p - 0.35) / 0.65;
+      const ease = 1 - (1 - q) * (1 - q); // 先快后慢
+      const rad = r.max * (0.35 + 0.65 * ease) + 1;
       const px = r.x - Render.camX, py = r.y - Render.camY;
       fx.globalAlpha = (1 - q) * (r.a || 0.55);
       fx.beginPath();
-      fx.ellipse(px, py, r.max * (0.3 + 0.7 * q) + 1, (r.max * (0.3 + 0.7 * q) + 1) * 0.55, 0, 0, Math.PI * 2);
+      fx.ellipse(px, py, rad, rad * 0.55, 0, 0, Math.PI * 2);
       fx.stroke();
     }
     fx.globalAlpha = 1;

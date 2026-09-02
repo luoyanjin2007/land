@@ -22,7 +22,7 @@ const Player = {
       this.idleTimer = (this.idleTimer || 0) - dt;
       if (this.idleTimer <= 0) {
         this.idleTimer = 0.8;
-        Effects.spawnRipple(this.x, this.y, 8, 1.2, false, 0.35);
+        Effects.spawnRipple(this.x, this.y, 10, 0.9, false, 0.35);
       }
     }
 
