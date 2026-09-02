@@ -6,9 +6,24 @@ const Player = {
   facing: 'down',  // 朝向：up / down / left / right
 
   init() {
-    // 出生点格子 → 像素坐标（格子中心）
-    this.x = (World.spawn.x + 0.5) * CONFIG.TILE;
-    this.y = (World.spawn.y + 0.5) * CONFIG.TILE;
+    // 出生点格子 → 像素坐标（格子中心）；不可行走时螺旋外扩找最近可走格
+    let sx = World.spawn.x, sy = World.spawn.y;
+    if (!World.walkable(sx, sy)) {
+      outer:
+      for (let r = 1; r < 40; r++) {
+        for (let dy = -r; dy <= r; dy++) {
+          for (let dx = -r; dx <= r; dx++) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+            if (World.walkable(sx + dx, sy + dy)) {
+              sx += dx; sy += dy;
+              break outer;
+            }
+          }
+        }
+      }
+    }
+    this.x = (sx + 0.5) * CONFIG.TILE;
+    this.y = (sy + 0.5) * CONFIG.TILE;
   },
 
   // 每帧更新：dt 是距上帧的秒数
