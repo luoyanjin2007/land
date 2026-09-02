@@ -293,12 +293,8 @@ const Render = {
     const cx = sx + CONFIG.TILE / 2;
     const by = sy + CONFIG.TILE;
 
-    if (t === TILE_TYPE.FOREST) {
-      const size = 30 + this.hash(wx, wy) * 12;
-      this.shadowOn(g, cx, by - 3, size * 0.3);
-      this.blitOn(g, 'tree-2', cx, by - 2, size * 0.8, size);
-    }
-    else if (t === TILE_TYPE.HOUSE) {
+    // 树改为动态绘制（见 drawTrees）：风吹摆动 + 人物经过弯腰
+    if (t === TILE_TYPE.HOUSE) {
       const isPagoda = this.hash(wx, wy) > 0.86;
       this.shadowOn(g, cx, by - 2, 14);
       if (isPagoda) this.blitOn(g, 'pagoda-2', cx, by - 2, 42, 46);
