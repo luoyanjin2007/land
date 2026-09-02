@@ -22,4 +22,5 @@ const TILE_TYPE = {
   WALL: 7,      // 城墙（不可通行）
   PLAZA: 8,     // 广场石板
   FOUNTAIN: 9,  // 中央喷泉（不可通行）
+  PATH: 10,     // 城际土路
 };

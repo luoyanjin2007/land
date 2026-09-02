@@ -71,9 +71,68 @@ const World = {
     // 出生点：圣魂村中央广场（喷泉旁两格，保证可行走）
     const v = this.cities[0];
     this.spawn = { x: v.x + (v.w >> 1), y: v.y + (v.h >> 1) + 2 };
+
+    // 城际道路
+    this.generateRoads(seed);
   },
 
   inBounds(x, y) { return x >= 0 && y >= 0 && x < this.W && y < this.H; },
+
+  // 确定性哈希（世界坐标 → 0~1）：植被和道路的自然抖动
+  hash(x, y) {
+    let h = (x * 374761393 + y * 668265263) | 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  },
+
+  // 城门选择：朝目标城市方向的那座门
+  gateToward(city, target) {
+    const cx = city.x + (city.w >> 1), cy = city.y + (city.h >> 1);
+    const dx = target.x + (target.w >> 1) - cx;
+    const dy = target.y + (target.h >> 1) - cy;
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      return { x: dx > 0 ? city.x + city.w - 1 : city.x, y: cy };
+    }
+    return { x: cx, y: dy > 0 ? city.y + city.h - 1 : city.y };
+  },
+
+  // 城际道路：贪心行走向目标推进 + 随机扰动（绕开水和山），确定性可复现
+  carveRoad(A, B, rng) {
+    const start = this.gateToward(A, B);
+    const goal = this.gateToward(B, A);
+    let x = start.x, y = start.y;
+    let guard = 6000;
+    while ((x !== goal.x || y !== goal.y) && guard-- > 0) {
+      this.roadTiles.add(x + ',' + y);
+      if (rng() < 0.4) this.roadTiles.add(x + ',' + (y + 1));   // 路面宽度自然变化
+      const dx = Math.sign(goal.x - x), dy = Math.sign(goal.y - y);
+      const steps = rng() < 0.35
+        ? [[dx, dy], [dx, 0], [0, dy]]
+        : [[dx, 0], [0, dy], [dx, dy]];
+      let moved = false;
+      for (const [mx, my] of steps) {
+        if (mx === 0 && my === 0) continue;
+        const nx = x + mx, ny = y + my;
+        const t = this.tileAt(nx, ny);
+        if (t !== TILE_TYPE.WATER && t !== TILE_TYPE.MOUNTAIN) {
+          x = nx; y = ny; moved = true;
+          break;
+        }
+      }
+      if (!moved) break;
+    }
+    this.roadTiles.add(goal.x + ',' + goal.y);
+  },
+
+  // 生成全部城际道路（正史路线：圣魂村→诺丁城→史莱克/索托→武魂城→星罗城）
+  generateRoads(seed) {
+    this.roadTiles = new Set();
+    const rng = mulberry32(seed + 999);
+    const links = [
+      [0, 1], [1, 2], [1, 3], [3, 4], [4, 5],
+    ];
+    for (const [a, b] of links) this.carveRoad(this.cities[a], this.cities[b], rng);
+  },
 
   // 所在城市（含 6 格城郊缓冲）：保证城边一定是陆地
   cityCovering(x, y) {
@@ -137,16 +196,21 @@ const World = {
   // 核心：任意格子的地形类型（按需计算）
   tileAt(x, y) {
     if (!this.inBounds(x, y)) return TILE_TYPE.WATER;
+    const rkey = x + ',' + y;
 
-    // 地标城市 + 城郊缓冲（优先级最高，保证城市不受海洋/群系侵蚀）
-    const c = this.cityCovering(x, y);
-    if (c) {
-      const lx = x - c.x, ly = y - c.y;
-      if (lx >= 0 && ly >= 0 && lx < c.w && ly < c.h) {
-        return this.getCityLayout(c)[ly][lx];
-      }
-      return TILE_TYPE.GRASS; // 城郊空地
+    // 城市内部布局优先
+    const cIn = this.cityAt(x, y);
+    if (cIn) {
+      const c = this.cities.find(cc => cc.name === cIn);
+      return this.getCityLayout(c)[y - c.y][x - c.x];
     }
+
+    // 城际道路（穿过城郊缓冲和野外，连接各城城门）
+    if (this.roadTiles.has(rkey)) return TILE_TYPE.PATH;
+
+    // 城郊缓冲（12 格开阔平地，让城市坐落在平原上）
+    const c = this.cityCovering(x, y);
+    if (c) return TILE_TYPE.GRASS;
 
     // 海神岛（西侧大海中的仙岛）
     const gi = this.godIsland;
@@ -172,13 +236,25 @@ const World = {
     // 南境沙漠（夹在星罗城南与南海之间）
     if (y > 566 + (this.coast(x, y) - 0.5) * 30) return TILE_TYPE.SAND;
 
-    // 星斗大森林（两帝国交界的原始大森林，有空地）
-    if (x >= this.forest.x0 && x <= this.forest.x1 &&
-        y >= this.forest.y0 && y <= this.forest.y1) {
-      return this.forestN(x, y) > 0.42 ? TILE_TYPE.FOREST : TILE_TYPE.GRASS;
+    // 星斗大森林：边缘柔化（噪声波浪边界）+ 内部疏密交错
+    const f = this.forest;
+    if (x >= f.x0 - 14 && x <= f.x1 + 14 && y >= f.y0 - 14 && y <= f.y1 + 14) {
+      const dEdge = Math.min(x - f.x0, f.x1 - x, y - f.y0, f.y1 - y);
+      const wave = (this.coast(x, y) - 0.5) * 30;           // 边缘波浪 ±15
+      const eff = dEdge + wave;
+      const n = this.forestN(x, y) + (this.hash(x, y) - 0.5) * 0.14;
+      if (eff > 10) {
+        // 深入内部：密林 / 疏林 / 空地 交错
+        if (n > 0.52) return TILE_TYPE.FOREST;
+        if (n > 0.38) return this.hash(x * 3 + 1, y * 3 + 7) < 0.45
+          ? TILE_TYPE.FOREST : TILE_TYPE.GRASS;
+        return TILE_TYPE.GRASS;
+      }
+      if (eff > -6 && n > 0.62) return TILE_TYPE.FOREST;    // 边缘外溢的树
+      // 边缘之外落到底部基础地形
     }
 
-    // 基础地形：起伏决定草原/碎林/湖泊/丘陵
+    // 基础地形：起伏决定草原/碎林/湖泊/山
     const e = this.n1(x, y) * 0.55 + this.n2(x, y) * 0.3 + this.n3(x, y) * 0.15;
     if (e < 0.30) return TILE_TYPE.WATER;   // 内陆湖
     if (e < 0.33) return TILE_TYPE.SAND;    // 湖岸

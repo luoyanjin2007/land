@@ -25,6 +25,7 @@ const Render = {
     [TILE_TYPE.WALL]: '#6e6659',
     [TILE_TYPE.PLAZA]: '#c9c2b0',
     [TILE_TYPE.FOUNTAIN]: '#9fc4d8',
+    [TILE_TYPE.PATH]: '#c2a575',
   },
 
   SPRITE_LIST: [
@@ -47,6 +48,7 @@ const Render = {
     [TILE_TYPE.GRASS]: ['tile-grass-2', 'tile-grass-2', 'tile-grass-2', 'tile-grass-1', 'tile-flower'],
     [TILE_TYPE.FOREST]: ['tile-forest'],
     [TILE_TYPE.ROAD]: ['tile-road'],
+    [TILE_TYPE.PATH]: ['tile-dirt', 'tile-dirt', 'tile-gravel'],
     [TILE_TYPE.PLAZA]: ['tile-plaza'],
     [TILE_TYPE.FOUNTAIN]: ['tile-plaza'],
     [TILE_TYPE.HOUSE]: ['tile-grass-2'],
