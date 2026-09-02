@@ -25,6 +25,7 @@ const Render = {
     [TILE_TYPE.WALL]: '#6e6659',
     [TILE_TYPE.PLAZA]: '#c9c2b0',
     [TILE_TYPE.FOUNTAIN]: '#9fc4d8',
+    [TILE_TYPE.HILL]: '#8d9b7a',
   },
 
   SPRITE_LIST: [
@@ -38,14 +39,18 @@ const Render = {
     'house-2', 'pagoda-2', 'fountain', 'tree-2',
     'tile-grass-1', 'tile-grass-2', 'tile-grass-3', 'tile-flower',
     'tile-road', 'tile-plaza', 'tile-sand', 'tile-water', 'tile-forest',
-    'tile-wall-top',
+    'tile-wall-top', 'tile-hill-1', 'tile-hill-2', 'tile-hill-3', 'tile-rock',
+    'tile-forest-dark', 'tile-bamboo', 'tile-leaf', 'tile-mushroom',
+    'tile-pebble', 'tile-cracked', 'tile-thick-grass', 'tile-dry-grass',
   ],
 
   TILE_IMG: {
+    [TILE_TYPE.HILL]: ['tile-hill-1', 'tile-hill-1', 'tile-hill-2', 'tile-hill-3'],
     [TILE_TYPE.WATER]: ['tile-water'],
-    [TILE_TYPE.SAND]: ['tile-sand'],
+    [TILE_TYPE.SAND]: ['tile-sand', 'tile-sand', 'tile-pebble', 'tile-cracked'],
     [TILE_TYPE.GRASS]: ['tile-grass-2', 'tile-grass-2', 'tile-grass-2', 'tile-grass-1', 'tile-flower'],
-    [TILE_TYPE.FOREST]: ['tile-forest'],
+    [TILE_TYPE.FOREST]: ['tile-forest'], // 星斗大森林内的变体在 drawGroundInto 里按区域启用
+    [TILE_TYPE.MOUNTAIN]: ['tile-rock'],
     [TILE_TYPE.ROAD]: ['tile-road'],
     [TILE_TYPE.PLAZA]: ['tile-plaza'],
     [TILE_TYPE.FOUNTAIN]: ['tile-plaza'],
@@ -243,7 +248,20 @@ const Render = {
     g.fillRect(sx, sy, CONFIG.TILE, CONFIG.TILE);
 
     const imgs = this.TILE_IMG[t];
-    if (imgs) {
+    if (t === TILE_TYPE.FOREST) {
+      // 星斗大森林内启用地面变体（密林/落叶/蘑菇），村内外围用统一地面
+      const inZone = wx >= World.forest.x0 && wx <= World.forest.x1 &&
+                     wy >= World.forest.y0 && wy <= World.forest.y1;
+      const pool = inZone
+        ? ['tile-forest', 'tile-forest-dark', 'tile-leaf', 'tile-mushroom']
+        : imgs;
+      const name = pool[Math.floor(this.hash(wx, wy) * pool.length)];
+      const img = this.sprites[name];
+      if (img && img.complete && img.naturalWidth) {
+        g.drawImage(img, sx, sy, CONFIG.TILE, CONFIG.TILE);
+      }
+    }
+    else if (imgs) {
       const name = imgs[Math.floor(this.hash(wx, wy) * imgs.length)];
       const img = this.sprites[name];
       if (img && img.complete && img.naturalWidth) {

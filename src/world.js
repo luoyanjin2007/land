@@ -75,10 +75,17 @@ const World = {
 
   inBounds(x, y) { return x >= 0 && y >= 0 && x < this.W && y < this.H; },
 
-  // 所在城市（含 6 格城郊缓冲）：保证城边一定是陆地
+  // 确定性哈希（世界坐标 → 0~1）：给植被和地形做自然抖动
+  hash(x, y) {
+    let h = (x * 374761393 + y * 668265263) | 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  },
+
+  // 所在城市（含 10 格城郊缓冲）：保证城市坐落在开阔平地
   cityCovering(x, y) {
     for (const c of this.cities) {
-      if (x >= c.x - 6 && x < c.x + c.w + 6 && y >= c.y - 6 && y < c.y + c.h + 6) return c;
+      if (x >= c.x - 10 && x < c.x + c.w + 10 && y >= c.y - 10 && y < c.y + c.h + 10) return c;
     }
     return null;
   },
@@ -162,8 +169,9 @@ const World = {
     const eEdge = 735 + (this.coast(x, y) - 0.5) * 60;
     if (x < wEdge || x > eEdge) return TILE_TYPE.WATER;
 
-    // 北境天山
-    if (y < 42 + this.n2(x, y) * 24) return TILE_TYPE.MOUNTAIN;
+    // 北境天山：山脊不可走，丘陵山脚可走（层次分明的山）
+    if (y < 34 + this.n2(x, y) * 12) return TILE_TYPE.MOUNTAIN;
+    if (y < 58 + this.n2(x, y) * 18) return TILE_TYPE.HILL;
 
     // 南海
     const sEdge = 762 + (this.coast(x, y) - 0.5) * 40;
@@ -172,27 +180,33 @@ const World = {
     // 南境沙漠（夹在星罗城南与南海之间）
     if (y > 566 + (this.coast(x, y) - 0.5) * 30) return TILE_TYPE.SAND;
 
-    // 星斗大森林（两帝国交界的原始大森林，有空地）
+    // 星斗大森林：密林 / 疏林 / 林间空地交错，边缘带抖动不规则
     if (x >= this.forest.x0 && x <= this.forest.x1 &&
         y >= this.forest.y0 && y <= this.forest.y1) {
-      return this.forestN(x, y) > 0.42 ? TILE_TYPE.FOREST : TILE_TYPE.GRASS;
+      const n = this.forestN(x, y) + (this.hash(x, y) - 0.5) * 0.18;
+      if (n > 0.55) return TILE_TYPE.FOREST;                        // 密林
+      if (n > 0.40) return this.hash(x * 3 + 1, y * 3 + 7) < 0.45
+        ? TILE_TYPE.FOREST : TILE_TYPE.GRASS;                       // 疏林与空地
+      return TILE_TYPE.GRASS;                                       // 林间空地
     }
 
-    // 基础地形：起伏决定草原/碎林/湖泊/丘陵
+    // 基础地形：起伏决定层次 草原/碎林/湖泊/丘陵/山峰
     const e = this.n1(x, y) * 0.55 + this.n2(x, y) * 0.3 + this.n3(x, y) * 0.15;
     if (e < 0.30) return TILE_TYPE.WATER;   // 内陆湖
     if (e < 0.33) return TILE_TYPE.SAND;    // 湖岸
     if (e < 0.55) {
-      return this.forestN(x, y) > 0.68 ? TILE_TYPE.FOREST : TILE_TYPE.GRASS;
+      const n = this.forestN(x, y) + (this.hash(x + 7, y + 3) - 0.5) * 0.12;
+      return n > 0.68 ? TILE_TYPE.FOREST : TILE_TYPE.GRASS;  // 碎林
     }
-    return TILE_TYPE.MOUNTAIN;
+    if (e < 0.68) return TILE_TYPE.HILL;    // 丘陵：可行走的山脚
+    return TILE_TYPE.MOUNTAIN;              // 山峰：不可行走
   },
 
-  // 可通行：山、建筑、城墙、喷泉阻挡；水可游泳通过
+  // 可通行：山峰、树、建筑、城墙、喷泉阻挡；水可游泳通过，丘陵可走
   walkable(x, y) {
     if (!this.inBounds(x, y)) return false;
     const t = this.tileAt(x, y);
-    return t !== TILE_TYPE.MOUNTAIN &&
+    return t !== TILE_TYPE.MOUNTAIN && t !== TILE_TYPE.FOREST &&
            t !== TILE_TYPE.HOUSE && t !== TILE_TYPE.WALL &&
            t !== TILE_TYPE.FOUNTAIN;
   },

@@ -194,7 +194,32 @@ async function main() {
     }
   }
 
+
+  // ---------- 地形瓷砖图集 v2：丘陵/森林变体/沙地变体 ----------
+  const t2 = await Jimp.read(path.join(ROOT, 'assets', '地形瓷砖图集v2.jpeg'));
+  const t2Names = [
+    ['tile-hill-1', 'tile-hill-2', 'tile-hill-3', 'tile-rock'],
+    ['tile-forest-dark', 'tile-bamboo', 'tile-leaf', 'tile-mushroom'],
+    [null, null, null, 'tile-cracked'],   // 第三行山峰/雪山带天空背景，跳过
+    ['tile-pebble', 'tile-wood', 'tile-thick-grass', 'tile-dry-grass'],
+  ];
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      const name = t2Names[r][c];
+      if (!name) continue;
+      const inset = Math.floor(tw * 0.07);
+      const cell = t2.clone().crop({
+        x: c * tw + inset, y: r * th + inset,
+        w: tw - inset * 2, h: th - inset * 2,
+      });
+      cell.resize({ w: 128, h: 128 });
+      clampEdges(cell, 3);
+      await cell.write(path.join(OUT, name + '.png'));
+    }
+  }
+
   console.log('完成，输出文件：');
+
   for (const f of fs.readdirSync(OUT).sort()) {
     const s = fs.statSync(path.join(OUT, f));
     console.log(`  ${f}  (${Math.round(s.size / 1024)}KB)`);
