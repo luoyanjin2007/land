@@ -293,9 +293,7 @@ const Render = {
       if (isPagoda) this.blitOn(g, 'pagoda-2', cx, by - 2, 42, 46);
       else this.blitOn(g, 'house-2', cx, by - 2, 42, 42);
     }
-    else if (t === TILE_TYPE.WALL) {
-      this.blitOn(g, 'tile-wall-top', sx, sy, CONFIG.TILE, CONFIG.TILE);
-    }
+    // 墙砖由地面层 TILE_IMG[WALL] 绘制（此前道具层错位重复绘制，已删）
     else if (t === TILE_TYPE.FOUNTAIN) {
       this.blitOn(g, 'fountain', cx, by - 2, 40, 40);
     }
