@@ -7,6 +7,9 @@ const Ambience = {
   flyTimer: 0,
   scareCd: new Map(),   // 每棵树的惊鸟冷却
 
+  // 目前所有状态都是懒加载，无需初始化；保留方法以统一各模块的启动协议
+  init() {},
+
   // 昼夜循环（约 4 分钟一轮）：0 = 白天正午，1 = 深夜
   nightLevel(time) {
     const s = Math.sin((time / 1000 / 240) * Math.PI * 2);
