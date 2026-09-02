@@ -322,27 +322,34 @@ const Render = {
     }
     const img = this.sprites[name];
 
-    // 陆上有影子；水里没有影子（贴图自带浸水感）
-    if (!swimming) this.shadow(Player.x - this.camX, Player.y - this.camY + 12, 9);
+    if (!img || !img.complete || !img.naturalWidth) return;
 
-    // 游泳和陆地统一尺寸；浮沉起伏只在静止漂浮时有（移动时不晃）
+    if (swimming) {
+      // 只画水线以上的部分（约 55%）：头和肩膀露出水面，下半身不可见。
+      // 裁剪边正好是贴图自带的白色水线环，看起来像整个人浸在水中。
+      const CROP = 0.6;                  // 显示顶部 60%（头 + 肩膀露在水面上）
+      const iw = img.naturalWidth, ih = img.naturalHeight;
+      const w = 40 * iw / ih;
+      const hCrop = 40 * CROP;
+      const bob = !Player.moving ? Math.sin(time / 320) * 1.6 : 0; // 静止漂浮起伏
+      ctx.save();
+      ctx.translate(Player.x - this.camX, Player.y - this.camY + 4 + bob);
+      if (flip) ctx.scale(-1, 1);
+      ctx.drawImage(img, 0, 0, iw, ih * CROP, -w / 2, -hCrop, w, hCrop);
+      ctx.restore();
+      return;
+    }
+
+    this.shadow(Player.x - this.camX, Player.y - this.camY + 12, 9);
+
     const h = 40;
-    const w = img && img.naturalWidth ? h * img.naturalWidth / img.naturalHeight : 24;
-    const bob = !Player.moving ? Math.sin(time / 320) * 1.6
-              : (swimming ? 0 : Math.sin(time / 90) * 2);
-    const sink = swimming ? 3 : 0;
+    const w = img.naturalWidth ? h * img.naturalWidth / img.naturalHeight : 24;
+    const bob = !Player.moving ? Math.sin(time / 320) * 1.6 : Math.sin(time / 90) * 2;
 
     ctx.save();
-    ctx.translate(Player.x - this.camX, Player.y - this.camY + 20 - h / 2 + sink + bob);
+    ctx.translate(Player.x - this.camX, Player.y - this.camY + 20 - h / 2 + bob);
     if (flip) ctx.scale(-1, 1);
-    if (img && img.complete && img.naturalWidth) {
-      ctx.drawImage(img, -w / 2, -h / 2, w, h);
-    } else {
-      ctx.font = '26px serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('🧍', 0, 0);
-    }
+    ctx.drawImage(img, -w / 2, -h / 2, w, h);
     ctx.restore();
   },
 

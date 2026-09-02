@@ -39,24 +39,25 @@ const Player = {
     this.tryMove(0, dy);
 
     // 入水瞬间：一个大圈；游泳中：身后拖出明显的 V 字尾流
+    // 尾流圈要明显大于雨滴涟漪，且快速消散（不残留到很远的地方）
     if (this.inWater && !wasInWater) {
-      Effects.spawnRipple(this.x, this.y, 16, 1.1, false);
+      Effects.spawnRipple(this.x, this.y, 24, 0.8, false);
       this.swimTimer = 0.15;
       this.swimSide = false;
     } else if (this.inWater) {
       this.swimTimer -= dt;
       if (this.swimTimer <= 0) {
-        this.swimTimer = 0.16;
+        this.swimTimer = 0.18;
         // 身后位置（前进的反方向）
         const backX = this.facing === 'left' ? 12 : this.facing === 'right' ? -12 : 0;
         const backY = this.facing === 'up' ? 12 : this.facing === 'down' ? -12 : 0;
         // 左右交替的侧向偏移（垂直于前进方向），形成 V 字水痕
         this.swimSide = !this.swimSide;
-        const side = this.swimSide ? 8 : -8;
+        const side = this.swimSide ? 9 : -9;
         const perpX = (this.facing === 'up' || this.facing === 'down') ? side : 0;
         const perpY = (this.facing === 'left' || this.facing === 'right') ? side : 0;
-        Effects.spawnRipple(this.x + backX, this.y + backY, 13, 1.0, false);
-        Effects.spawnRipple(this.x + backX + perpX, this.y + backY + perpY, 10, 0.9, false);
+        Effects.spawnRipple(this.x + backX, this.y + backY, 22, 0.55, false);
+        Effects.spawnRipple(this.x + backX + perpX, this.y + backY + perpY, 16, 0.45, false);
       }
     }
   },
