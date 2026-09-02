@@ -48,7 +48,8 @@ const Player = {
     this.tryMove(dx, 0);
     this.tryMove(0, dy);
 
-    // 入水瞬间：一个大圈；游泳中：身后拖出大而深的 V 字尾流（密集生成）
+    // 入水瞬间：一个大圈；游泳中：从人物正中心（水线处）持续荡开扩散波纹
+    // 涟漪画在人物之下：人物自然遮挡圈的上半段，下半段在身前水面可见
     if (this.inWater && !wasInWater) {
       Effects.spawnRipple(this.x, this.y, 24, 0.8, false, 0.85);
       this.swimTimer = 0.1;
@@ -57,17 +58,18 @@ const Player = {
       this.swimTimer -= dt;
       if (this.swimTimer <= 0) {
         this.swimTimer = 0.13;
-        // 身后位置（前进的反方向）
-        const backX = this.facing === 'left' ? 26 : this.facing === 'right' ? -26 : 0;
-        const backY = this.facing === 'up' ? 26 : this.facing === 'down' ? -26 : 0;
-        // 左右交替的侧向偏移（垂直于前进方向），形成 V 字水痕
+        // 正中心的大扩散圈（实时在脚下）
+        Effects.spawnRipple(this.x, this.y + 4, 26, 0.6, false, 0.85, { noDrop: true });
+        // 溅起的水花（身上）
+        Effects.spawnRipple(this.x, this.y, 8, 0.4, false, 0.8, { noRing: true });
+        // 身后侧向的小圈，交替偏移形成 V 字尾迹
         this.swimSide = !this.swimSide;
         const side = this.swimSide ? 9 : -9;
+        const backX = this.facing === 'left' ? 18 : this.facing === 'right' ? -18 : 0;
+        const backY = this.facing === 'up' ? 18 : this.facing === 'down' ? -18 : 0;
         const perpX = (this.facing === 'up' || this.facing === 'down') ? side : 0;
         const perpY = (this.facing === 'left' || this.facing === 'right') ? side : 0;
-        Effects.spawnRipple(this.x, this.y, 8, 0.4, false, 0.8, { noRing: true });   // 身上溅水花
-        Effects.spawnRipple(this.x + backX, this.y + backY, 26, 0.6, false, 0.85, { noDrop: true });        // 身后尾流圈
-        Effects.spawnRipple(this.x + backX + perpX, this.y + backY + perpY, 18, 0.5, false, 0.7, { noDrop: true });
+        Effects.spawnRipple(this.x + backX + perpX, this.y + backY + perpY, 16, 0.5, false, 0.6, { noDrop: true });
       }
     }
   },
