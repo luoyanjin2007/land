@@ -96,71 +96,83 @@ const World = {
     return { x: cx, y: dy > 0 ? city.y + city.h - 1 : city.y };
   },
 
-  // 城际道路：A* 寻路（保证绕开山与水、必达终点），铺路时加随机宽度
+  // 城际道路：BFS 双模式——优先纯陆地；不通时允许涉水（水上铺木桥）
   carveRoad(A, B, rng) {
     const start = this.gateToward(A, B);
     const goal = this.gateToward(B, A);
     const K = (x, y) => x + ',' + y;
-    const hEst = (x, y) => Math.abs(x - goal.x) + Math.abs(y - goal.y);
-    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    const T = CONFIG.TILE;
 
-    const open = new Map();               // 待探索：key -> {g, f}
-    const came = new Map();               // key -> 前驱 key
-    const closed = new Set();
-    open.set(K(start.x, start.y), { g: 0, f: hEst(start.x, start.y) });
-
-    let goalKey = K(goal.x, goal.y);
-    let iter = 0;
-    while (open.size && iter++ < 60000) {
-      // 取 f 最小的节点（节点数少，线性扫足够快）
-      let bk = null, bf = Infinity;
-      for (const [k, v] of open) { if (v.f < bf) { bf = v.f; bk = k; } }
-      const cur = open.get(bk);
-      open.delete(bk);
-      closed.add(bk);
-      if (bk === goalKey) break;
-      for (const [dx, dy] of dirs) {
-        const nx = cur.x + dx, ny = cur.y + dy;
-        if (!this.inBounds(nx, ny)) continue;
-        const nk = K(nx, ny);
-        if (closed.has(nk)) continue;
-        const t = this.tileAt(nx, ny);
-        if (t === TILE_TYPE.WATER || t === TILE_TYPE.MOUNTAIN) continue;
-        const g2 = cur.g + 1;
-        const ex = open.get(nk);
-        if (!ex || ex.g > g2) {
-          open.set(nk, { g: g2, f: g2 + hEst(nx, ny) });
-          came.set(nk, bk);
+    // BFS：allowWater=false 只走陆地；true 时可涉水（水格标为桥）
+    const bfs = (allowWater) => {
+      const came = new Map();
+      const q = [[start.x, start.y]];
+      const seen = new Set([K(start.x, start.y)]);
+      while (q.length) {
+        const [x, y] = q.shift();
+        if (x === goal.x && y === goal.y) {
+          // 回溯路径
+          const path = [];
+          let k = K(x, y);
+          while (k !== K(start.x, start.y)) { path.push(k); k = came.get(k); }
+          path.push(K(start.x, start.y));
+          return path;
+        }
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nx = x + dx, ny = y + dy;
+          const nk = K(nx, ny);
+          if (seen.has(nk) || !this.inBounds(nx, ny)) continue;
+          const t = this.tileAt(nx, ny);
+          if (t === TILE_TYPE.WATER && !allowWater) continue;
+          if (t === TILE_TYPE.MOUNTAIN || t === TILE_TYPE.HOUSE ||
+              t === TILE_TYPE.WALL || t === TILE_TYPE.FOUNTAIN) continue;
+          seen.add(nk);
+          came.set(nk, K(x, y));
+          q.push([nx, ny]);
         }
       }
-    }
+      return null;
+    };
 
-    // 回溯路径铺路（A* 失败时直线路径兜底）
-    const path = [];
-    let k = goalKey;
-    if (came.has(k) || K(start.x, start.y) === k) {
-      while (k && k !== K(start.x, start.y)) { path.push(k); k = came.get(k); }
-      path.push(K(start.x, start.y));
-    } else {
+    let path = bfs(false);              // 先尝试纯陆地
+    let bridge = false;
+    if (!path) { path = bfs(true); bridge = true; }   // 不通：木桥模式
+
+    if (!path) {
+      // 极端兜底：直线（几乎不会发生）
       const dx = Math.sign(goal.x - start.x), dy = Math.sign(goal.y - start.y);
       let x = start.x, y = start.y;
-      path.push(K(x, y));
+      path = [K(x, y)];
       while (x !== goal.x || y !== goal.y) {
         if (x !== goal.x) x += dx;
         else if (y !== goal.y) y += dy;
         path.push(K(x, y));
       }
     }
+
+    // 铺路：水上格记为桥（渲染用木栈道贴图）
     for (const kk of path) {
       this.roadTiles.add(kk);
+      if (bridge) {
+        const [px, py] = kk.split(',').map(Number);
+        if (this.tileAt(px, py) === TILE_TYPE.WATER) this.bridgeTiles.add(kk);
+      }
       const [px, py] = kk.split(',').map(Number);
-      if (rng() < 0.4) this.roadTiles.add(px + ',' + (py + 1));   // 路宽自然变化
+      // 路宽自然变化（加宽格不可是建筑/山/水）
+      if (rng() < 0.4) {
+        const t2 = this.tileAt(px, py + 1);
+        if (t2 !== TILE_TYPE.WATER && t2 !== TILE_TYPE.MOUNTAIN &&
+            t2 !== TILE_TYPE.HOUSE && t2 !== TILE_TYPE.WALL && t2 !== TILE_TYPE.FOUNTAIN) {
+          this.roadTiles.add(px + ',' + (py + 1));
+        }
+      }
     }
   },
 
   // 生成全部城际道路（正史路线：圣魂村→诺丁城→史莱克/索托→武魂城→星罗城）
   generateRoads(seed) {
     this.roadTiles = new Set();
+    this.bridgeTiles = new Set();
     const rng = mulberry32(seed + 999);
     const links = [
       [0, 1], [1, 2], [1, 3], [3, 4], [4, 5],
@@ -171,7 +183,7 @@ const World = {
   // 所在城市（含 6 格城郊缓冲）：保证城边一定是陆地
   cityCovering(x, y) {
     for (const c of this.cities) {
-      if (x >= c.x - 6 && x < c.x + c.w + 6 && y >= c.y - 6 && y < c.y + c.h + 6) return c;
+      if (x >= c.x - 12 && x < c.x + c.w + 12 && y >= c.y - 12 && y < c.y + c.h + 12) return c;
     }
     return null;
   },
