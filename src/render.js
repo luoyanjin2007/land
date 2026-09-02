@@ -263,19 +263,21 @@ const Render = {
           for (let wx = cx0; wx <= cx1; wx++) {
             if (World.tileAt(wx, wy) !== TILE_TYPE.HOUSE) continue;
             const hv = this.hash(wx, wy);
-            if (hv < 0.35) continue;   // 有些屋子没开灯
+            if (hv < 0.2) continue;   // 少数黑灯的屋子
             const sx = wx * CONFIG.TILE - this.camX;
             const sy = wy * CONFIG.TILE - this.camY - 2;
             ctx.fillStyle = `rgba(255,214,120,${Math.min(1, (night - 0.05) * 1.6)})`;
             ctx.fillRect(sx + 7, sy + 6, 5, 6);
             ctx.fillRect(sx + 20, sy + 6, 5, 6);
+            ctx.fillStyle = `rgba(255,200,110,${night * 0.18})`;   // 窗灯暖光晕
+            ctx.fillRect(sx + 1, sy, 30, 16);
           }
         }
       }
     }
 
     this.drawMinimap();
-    this.drawHUD();
+    this.drawHUD(time);
 
     // 世界地图覆盖层（M 键开关，最顶层）
     WorldMap.drawOverlay(time);
@@ -556,18 +558,29 @@ const Render = {
     ctx.fill();
   },
 
-  drawHUD() {
+  drawHUD(time) {
     const { ctx } = this;
     ctx.font = '13px "Microsoft YaHei", sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = 'rgba(255,255,255,.85)';
+    // 游戏时间：240 秒 = 1 天（与昼夜循环同步）
+    const day = Math.floor(time / 1000 / 240) + 1;
+    const t1 = (time / 1000) % 240;
+    let phase, icon;
+    if (t1 < 25) { phase = '黎明'; icon = '🌅'; }
+    else if (t1 < 95) { phase = '夜晚'; icon = '🌙'; }
+    else if (t1 < 120) { phase = '黎明'; icon = '🌅'; }
+    else if (t1 < 210) { phase = '白天'; icon = '☀️'; }
+    else { phase = '黄昏'; icon = '🌆'; }
     const city = World.cityAt(Player.tileX(), Player.tileY());
+    const move = Player.inWater ? '🏊 游泳中'
+      : (Input.running() ? '🏃 奔跑中' : '🚶 步行');
     ctx.fillText(
+      `🗓️ 第${day}天 ${icon}${phase}  ` +
       `位置 (${Player.tileX()}, ${Player.tileY()})  ` +
       (city ? `🏘️ ${city}  ` : '') +
-      (Player.inWater ? '🏊 游泳中  ' : '') +
-      `${Input.running() ? '🏃奔跑中' : '🚶步行'}  M 世界地图`,
+      `${move}  M 世界地图`,
       180, 24
     );
   },
