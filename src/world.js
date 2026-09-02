@@ -1,17 +1,23 @@
-// 世界生成：用「值噪声」算法生成一片大陆
-// 地形分布：低处是水，往上是沙滩、草地、森林、高山
+// 世界：斗罗大陆 800×800，按需生成（tileAt 随时计算任意格子，不存整张地图）
+//
+// 三层结构：
+//   1. 大陆骨架（正史地理）：西海、北境天山、南境沙漠、南海、东海、海神岛
+//   2. 群系噪声：星斗大森林、基础地形（草原/碎林/湖泊/丘陵）
+//   3. 地标城市：6 座城市按正史相对位置落位，内部布局懒加载生成
+//
+// 同一个 (x,y) 永远算出同一个结果——世界是确定的，内存占用与地图尺寸无关
 
-// 可复现的随机数生成器（同一个种子 = 同一个世界）
-function mulberry32(seed) {
+// 可复现随机数（同一种子 = 同一个世界）
+function mulberry32(a) {
   return function () {
-    seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
 
-// 生成一层噪声：在粗糙网格上撒随机数，再双线性插值放大成平滑起伏
+// 值噪声层：粗糙网格撒随机数 + 双线性插值 + smoothstep
 function makeNoiseLayer(w, h, cell, rng) {
   const gw = Math.ceil(w / cell) + 2;
   const gh = Math.ceil(h / cell) + 2;
@@ -20,170 +26,63 @@ function makeNoiseLayer(w, h, cell, rng) {
     grid[y] = [];
     for (let x = 0; x < gw; x++) grid[y][x] = rng();
   }
-  // 采样函数：把世界坐标映射到网格上做平滑插值
   return function (x, y) {
     const fx = x / cell, fy = y / cell;
     const x0 = Math.floor(fx), y0 = Math.floor(fy);
     const tx = fx - x0, ty = fy - y0;
-    const sx = tx * tx * (3 - 2 * tx); // smoothstep，让过渡更自然
-    const sy = ty * ty * (3 - 2 * ty);
-    const v00 = grid[y0][x0],     v10 = grid[y0][x0 + 1];
+    const sxx = tx * tx * (3 - 2 * tx);
+    const syy = ty * ty * (3 - 2 * ty);
+    const v00 = grid[y0][x0], v10 = grid[y0][x0 + 1];
     const v01 = grid[y0 + 1][x0], v11 = grid[y0 + 1][x0 + 1];
-    return (v00 * (1 - sx) + v10 * sx) * (1 - sy) +
-           (v01 * (1 - sx) + v11 * sx) * sy;
+    return (v00 * (1 - sxx) + v10 * sxx) * (1 - syy) +
+           (v01 * (1 - sxx) + v11 * sxx) * syy;
   };
 }
 
 const World = {
-  tiles: null,   // 二维数组 tiles[y][x] = 地形编号
-  spawn: null,   // 出生点 {x, y}（格子坐标）
-  cities: [],    // 城市列表 {x, y, w, h, name}
+  W: CONFIG.WORLD_W, H: CONFIG.WORLD_H,
+  cities: [],              // {x, y, w, h, name, seed}
+  godIsland: { x: 80, y: 300, rx: 32, ry: 26 },   // 海神岛（西侧大海）
+  forest: { x0: 260, y0: 260, x1: 430, y1: 400 }, // 星斗大森林（两帝国交界）
+  spawn: null,
+  _layouts: new Map(),     // 城市内部布局缓存 name -> 二维数组
 
-  // 生成世界
+  // 初始化：只建噪声层和城市定义，不生成任何格子
   generate(seed) {
+    this.seed = seed;
     const rng = mulberry32(seed);
-    const { MAP_W: w, MAP_H: h } = CONFIG;
-    // 三层噪声叠加：大轮廓 + 中等起伏 + 细节
-    const n1 = makeNoiseLayer(w, h, 64, rng);
-    const n2 = makeNoiseLayer(w, h, 24, rng);
-    const n3 = makeNoiseLayer(w, h, 9, rng);
+    this.n1 = makeNoiseLayer(this.W, this.H, 64, rng);   // 大起伏
+    this.n2 = makeNoiseLayer(this.W, this.H, 24, rng);   // 中起伏
+    this.n3 = makeNoiseLayer(this.W, this.H, 9, rng);    // 细节
+    this.coast = makeNoiseLayer(this.W, this.H, 40, rng);// 海岸线扰动
+    this.forestN = makeNoiseLayer(this.W, this.H, 18, rng); // 森林分布
 
-    this.tiles = [];
-    for (let y = 0; y < h; y++) {
-      this.tiles[y] = [];
-      for (let x = 0; x < w; x++) {
-        // 用到地图中心的距离做「岛屿化」：越靠边越低（变海）
-        const dx = (x - w / 2) / (w / 2);
-        const dy = (y - h / 2) / (h / 2);
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        const e = n1(x, y) * 0.55 + n2(x, y) * 0.3 + n3(x, y) * 0.15
-                - dist * dist * 0.55;
-        this.tiles[y][x] = this.classify(e);
-      }
-    }
-    this.buildCities(rng);
-    this.findSpawn();
+    // 六大地标（正史相对位置：圣魂村→诺丁城→史莱克在北，索托城中，
+    // 武魂城在两帝国交界，星罗城在南）
+    this.cities = [
+      { x: 187, y: 130, w: 26, h: 20, name: '圣魂村' },
+      { x: 287, y: 168, w: 34, h: 26, name: '诺丁城' },
+      { x: 405, y: 218, w: 30, h: 24, name: '史莱克学院' },
+      { x: 343, y: 287, w: 34, h: 26, name: '索托城' },
+      { x: 382, y: 456, w: 36, h: 28, name: '武魂城' },
+      { x: 463, y: 527, w: 34, h: 26, name: '星罗城' },
+    ].map((c, i) => ({ ...c, seed: seed + 1000 + i * 77 }));
+
+    // 出生点：圣魂村中央广场（喷泉旁两格，保证可行走）
+    const v = this.cities[0];
+    this.spawn = { x: v.x + (v.w >> 1), y: v.y + (v.h >> 1) + 2 };
   },
 
-  // 在大陆上盖城市：城墙一圈 + 十字大街 + 中央广场喷泉 + 民居
-  buildCities(rng) {
-    // 城市位置：出生区域东侧不远处（保证玩家出门就能走到）
-    const cx = (CONFIG.MAP_W >> 1) + 14;
-    const cy = (CONFIG.MAP_H >> 1) - 8;
-    this.stampCity(cx, cy, 26, 20, '圣魂村', rng);
+  inBounds(x, y) { return x >= 0 && y >= 0 && x < this.W && y < this.H; },
+
+  // 所在城市（含 6 格城郊缓冲）：保证城边一定是陆地
+  cityCovering(x, y) {
+    for (const c of this.cities) {
+      if (x >= c.x - 6 && x < c.x + c.w + 6 && y >= c.y - 6 && y < c.y + c.h + 6) return c;
+    }
+    return null;
   },
 
-  stampCity(ox, oy, w, h, name, rng) {
-    // 记录城市范围（HUD 显示用）
-    this.cities.push({ x: ox, y: oy, w, h, name });
-
-    const set = (x, y, t) => {
-      if (this.inBounds(x, y)) this.tiles[y][x] = t;
-    };
-    const get = (x, y) => this.inBounds(x, y) ? this.tiles[y][x] : -1;
-
-    // 1. 平整地基：整个区域先铺草地（覆盖原来的森林山地等）
-    for (let y = oy; y < oy + h; y++) {
-      for (let x = ox; x < ox + w; x++) set(x, y, TILE_TYPE.GRASS);
-    }
-
-    // 2. 城墙一圈（四角留塔楼位），每边正中开城门
-    const gx = ox + (w >> 1), gy = oy + (h >> 1);
-    for (let x = ox; x < ox + w; x++) {
-      set(x, oy, TILE_TYPE.WALL);              // 北墙
-      set(x, oy + h - 1, TILE_TYPE.WALL);      // 南墙
-    }
-    for (let y = oy; y < oy + h; y++) {
-      set(ox, y, TILE_TYPE.WALL);              // 西墙
-      set(ox + w - 1, y, TILE_TYPE.WALL);      // 东墙
-    }
-    set(gx, oy, TILE_TYPE.ROAD);               // 北城门
-    set(gx, oy + h - 1, TILE_TYPE.ROAD);       // 南城门
-    set(ox, gy, TILE_TYPE.ROAD);               // 西城门
-    set(ox + w - 1, gy, TILE_TYPE.ROAD);       // 东城门
-
-    // 3. 十字大街 + 环城内街
-    for (let x = ox + 1; x < ox + w - 1; x++) set(x, gy, TILE_TYPE.ROAD);
-    for (let y = oy + 1; y < oy + h - 1; y++) set(gx, y, TILE_TYPE.ROAD);
-    for (let x = ox + 3; x < ox + w - 3; x++) {
-      set(x, oy + 3, TILE_TYPE.ROAD);
-      set(x, oy + h - 4, TILE_TYPE.ROAD);
-    }
-    for (let y = oy + 3; y < oy + h - 3; y++) {
-      set(ox + 3, y, TILE_TYPE.ROAD);
-      set(ox + w - 4, y, TILE_TYPE.ROAD);
-    }
-
-    // 4. 中央广场 + 喷泉
-    const px = gx - 2, py = gy - 2;
-    for (let y = py; y < py + 5; y++) {
-      for (let x = px; x < px + 5; x++) set(x, y, TILE_TYPE.PLAZA);
-    }
-    set(gx, gy, TILE_TYPE.FOUNTAIN);
-
-    // 5. 民居：沿街两侧、隔一格放一间（留出门口空隙），带确定性随机
-    for (let y = oy + 1; y < oy + h - 1; y++) {
-      for (let x = ox + 1; x < ox + w - 1; x++) {
-        const t = get(x, y);
-        if (t !== TILE_TYPE.GRASS) continue;
-        // 紧邻道路的草地才有资格盖房（临街而建）
-        const nearRoad =
-          get(x + 1, y) === TILE_TYPE.ROAD || get(x - 1, y) === TILE_TYPE.ROAD ||
-          get(x, y + 1) === TILE_TYPE.ROAD || get(x, y - 1) === TILE_TYPE.ROAD;
-        if (nearRoad && rng() < 0.55) set(x, y, TILE_TYPE.HOUSE);
-      }
-    }
-
-    // 6. 城里没盖房的空地撒几棵树点缀
-    for (let y = oy + 1; y < oy + h - 1; y++) {
-      for (let x = ox + 1; x < ox + w - 1; x++) {
-        if (get(x, y) === TILE_TYPE.GRASS && rng() < 0.12) set(x, y, TILE_TYPE.FOREST);
-      }
-    }
-  },
-
-  // 按高度值划分地形
-  classify(e) {
-    if (e < 0.28) return TILE_TYPE.WATER;
-    if (e < 0.33) return TILE_TYPE.SAND;
-    if (e < 0.55) return TILE_TYPE.GRASS;
-    if (e < 0.72) return TILE_TYPE.FOREST;
-    return TILE_TYPE.MOUNTAIN;
-  },
-
-  // 找一个安全出生点：从地图中心螺旋往外找第一块可行走的草地
-  findSpawn() {
-    const cx = CONFIG.MAP_W >> 1, cy = CONFIG.MAP_H >> 1;
-    for (let r = 0; r < 50; r++) {
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-          const x = cx + dx, y = cy + dy;
-          if (this.walkable(x, y) &&
-              this.tiles[y][x] === TILE_TYPE.GRASS) {
-            this.spawn = { x, y };
-            return;
-          }
-        }
-      }
-    }
-    this.spawn = { x: cx, y: cy }; // 兜底
-  },
-
-  inBounds(x, y) {
-    return x >= 0 && y >= 0 && x < CONFIG.MAP_W && y < CONFIG.MAP_H;
-  },
-
-  // 是否可通行：山、房屋、城墙、喷泉不能走；水可以游泳通过
-  walkable(x, y) {
-    if (!this.inBounds(x, y)) return false;
-    const t = this.tiles[y][x];
-    return t !== TILE_TYPE.MOUNTAIN &&
-           t !== TILE_TYPE.HOUSE && t !== TILE_TYPE.WALL &&
-           t !== TILE_TYPE.FOUNTAIN;
-  },
-
-  // 人物当前是否在城市里（返回城市名，不在则返回 null）
   cityAt(x, y) {
     for (const c of this.cities) {
       if (x >= c.x && x < c.x + c.w && y >= c.y && y < c.y + c.h) return c.name;
@@ -191,7 +90,110 @@ const World = {
     return null;
   },
 
+  // 城市内部布局（懒加载生成一次，缓存）
+  getCityLayout(c) {
+    let g = this._layouts.get(c.name);
+    if (g) return g;
+    const rng = mulberry32(c.seed);
+    g = [];
+    for (let y = 0; y < c.h; y++) g[y] = new Array(c.w).fill(TILE_TYPE.GRASS);
+    const set = (x, y, t) => { if (x >= 0 && y >= 0 && x < c.w && y < c.h) g[y][x] = t; };
+    const get = (x, y) => (x >= 0 && y >= 0 && x < c.w && y < c.h) ? g[y][x] : -1;
+    const gx = c.w >> 1, gy = c.h >> 1;
+    // 城墙一圈，四边正中开城门
+    for (let x = 0; x < c.w; x++) { set(x, 0, TILE_TYPE.WALL); set(x, c.h - 1, TILE_TYPE.WALL); }
+    for (let y = 0; y < c.h; y++) { set(0, y, TILE_TYPE.WALL); set(c.w - 1, y, TILE_TYPE.WALL); }
+    set(gx, 0, TILE_TYPE.ROAD); set(gx, c.h - 1, TILE_TYPE.ROAD);
+    set(0, gy, TILE_TYPE.ROAD); set(c.w - 1, gy, TILE_TYPE.ROAD);
+    // 十字大街 + 内环街
+    for (let x = 1; x < c.w - 1; x++) set(x, gy, TILE_TYPE.ROAD);
+    for (let y = 1; y < c.h - 1; y++) set(gx, y, TILE_TYPE.ROAD);
+    for (let x = 3; x < c.w - 3; x++) { set(x, 3, TILE_TYPE.ROAD); set(x, c.h - 4, TILE_TYPE.ROAD); }
+    for (let y = 3; y < c.h - 3; y++) { set(3, y, TILE_TYPE.ROAD); set(c.w - 4, y, TILE_TYPE.ROAD); }
+    // 中央广场 + 喷泉
+    for (let y = gy - 2; y <= gy + 2; y++) {
+      for (let x = gx - 2; x <= gx + 2; x++) set(x, y, TILE_TYPE.PLAZA);
+    }
+    set(gx, gy, TILE_TYPE.FOUNTAIN);
+    // 沿街民居
+    for (let y = 1; y < c.h - 1; y++) {
+      for (let x = 1; x < c.w - 1; x++) {
+        if (get(x, y) !== TILE_TYPE.GRASS) continue;
+        const near = get(x + 1, y) === TILE_TYPE.ROAD || get(x - 1, y) === TILE_TYPE.ROAD ||
+                     get(x, y + 1) === TILE_TYPE.ROAD || get(x, y - 1) === TILE_TYPE.ROAD;
+        if (near && rng() < 0.55) set(x, y, TILE_TYPE.HOUSE);
+      }
+    }
+    // 空地种树
+    for (let y = 1; y < c.h - 1; y++) {
+      for (let x = 1; x < c.w - 1; x++) {
+        if (get(x, y) === TILE_TYPE.GRASS && rng() < 0.12) set(x, y, TILE_TYPE.FOREST);
+      }
+    }
+    this._layouts.set(c.name, g);
+    return g;
+  },
+
+  // 核心：任意格子的地形类型（按需计算）
   tileAt(x, y) {
-    return this.inBounds(x, y) ? this.tiles[y][x] : TILE_TYPE.WATER;
+    if (!this.inBounds(x, y)) return TILE_TYPE.WATER;
+
+    // 地标城市 + 城郊缓冲（优先级最高，保证城市不受海洋/群系侵蚀）
+    const c = this.cityCovering(x, y);
+    if (c) {
+      const lx = x - c.x, ly = y - c.y;
+      if (lx >= 0 && ly >= 0 && lx < c.w && ly < c.h) {
+        return this.getCityLayout(c)[ly][lx];
+      }
+      return TILE_TYPE.GRASS; // 城郊空地
+    }
+
+    // 海神岛（西侧大海中的仙岛）
+    const gi = this.godIsland;
+    const ddx = (x - gi.x) / gi.rx, ddy = (y - gi.y) / gi.ry;
+    const dIsland = ddx * ddx + ddy * ddy;
+    if (dIsland < 1.15) {
+      const edge = dIsland > 0.72 || this.forestN(x, y) > 0.62;
+      return edge ? TILE_TYPE.SAND : TILE_TYPE.GRASS;
+    }
+
+    // 大陆骨架：西海 / 东海海岸线（噪声扰动）
+    const wEdge = 130 + (this.coast(x, y) - 0.5) * 70;
+    const eEdge = 735 + (this.coast(x, y) - 0.5) * 60;
+    if (x < wEdge || x > eEdge) return TILE_TYPE.WATER;
+
+    // 北境天山
+    if (y < 42 + this.n2(x, y) * 24) return TILE_TYPE.MOUNTAIN;
+
+    // 南海
+    const sEdge = 762 + (this.coast(x, y) - 0.5) * 40;
+    if (y > sEdge) return TILE_TYPE.WATER;
+
+    // 南境沙漠（夹在星罗城南与南海之间）
+    if (y > 566 + (this.coast(x, y) - 0.5) * 30) return TILE_TYPE.SAND;
+
+    // 星斗大森林（两帝国交界的原始大森林，有空地）
+    if (x >= this.forest.x0 && x <= this.forest.x1 &&
+        y >= this.forest.y0 && y <= this.forest.y1) {
+      return this.forestN(x, y) > 0.42 ? TILE_TYPE.FOREST : TILE_TYPE.GRASS;
+    }
+
+    // 基础地形：起伏决定草原/碎林/湖泊/丘陵
+    const e = this.n1(x, y) * 0.55 + this.n2(x, y) * 0.3 + this.n3(x, y) * 0.15;
+    if (e < 0.30) return TILE_TYPE.WATER;   // 内陆湖
+    if (e < 0.33) return TILE_TYPE.SAND;    // 湖岸
+    if (e < 0.55) {
+      return this.forestN(x, y) > 0.68 ? TILE_TYPE.FOREST : TILE_TYPE.GRASS;
+    }
+    return TILE_TYPE.MOUNTAIN;
+  },
+
+  // 可通行：山、建筑、城墙、喷泉阻挡；水可游泳通过
+  walkable(x, y) {
+    if (!this.inBounds(x, y)) return false;
+    const t = this.tileAt(x, y);
+    return t !== TILE_TYPE.MOUNTAIN &&
+           t !== TILE_TYPE.HOUSE && t !== TILE_TYPE.WALL &&
+           t !== TILE_TYPE.FOUNTAIN;
   },
 };

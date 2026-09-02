@@ -84,14 +84,16 @@ const Render = {
     this.canvas.height = innerHeight;
   },
 
-  // 小地图：把整个世界压成一张小图，只画一次
+  // 小地图：抽样渲染整个世界（每 2 格采 1 像素 → 400×400，只画一次）
   bakeMinimap() {
+    const STEP = 2;
     const c = document.createElement('canvas');
-    c.width = CONFIG.MAP_W; c.height = CONFIG.MAP_H;
+    c.width = Math.ceil(CONFIG.WORLD_W / STEP);
+    c.height = Math.ceil(CONFIG.WORLD_H / STEP);
     const mc = c.getContext('2d');
-    for (let y = 0; y < CONFIG.MAP_H; y++) {
-      for (let x = 0; x < CONFIG.MAP_W; x++) {
-        mc.fillStyle = this.COLORS[World.tiles[y][x]];
+    for (let y = 0; y < c.height; y++) {
+      for (let x = 0; x < c.width; x++) {
+        mc.fillStyle = this.COLORS[World.tileAt(x * STEP, y * STEP)];
         mc.fillRect(x, y, 1, 1);
       }
     }
@@ -105,8 +107,8 @@ const Render = {
   },
 
   clampCamera() {
-    const maxX = CONFIG.MAP_W * CONFIG.TILE - this.canvas.width;
-    const maxY = CONFIG.MAP_H * CONFIG.TILE - this.canvas.height;
+    const maxX = CONFIG.WORLD_W * CONFIG.TILE - this.canvas.width;
+    const maxY = CONFIG.WORLD_H * CONFIG.TILE - this.canvas.height;
     this.camX = Math.max(0, Math.min(maxX, this.camX));
     this.camY = Math.max(0, Math.min(maxY, this.camY));
   },
@@ -168,7 +170,7 @@ const Render = {
     for (let y = 0; y < CONFIG.CHUNK_TILES; y++) {
       for (let x = 0; x < CONFIG.CHUNK_TILES; x++) {
         const wx = cx * CONFIG.CHUNK_TILES + x, wy = cy * CONFIG.CHUNK_TILES + y;
-        if (World.inBounds(wx, wy) && World.tiles[wy][wx] === TILE_TYPE.WATER) {
+        if (World.inBounds(wx, wy) && World.tileAt(wx, wy) === TILE_TYPE.WATER) {
           g.fillRect(x * CONFIG.TILE, y * CONFIG.TILE, CONFIG.TILE, CONFIG.TILE);
         }
       }
@@ -207,7 +209,7 @@ const Render = {
     // 一遍贴上所有静态 chunk（地形 + 树 + 建筑）
     for (let cy = cy0; cy <= cy1; cy++) {
       for (let cx = cx0; cx <= cx1; cx++) {
-        if (cx * CONFIG.CHUNK_TILES >= CONFIG.MAP_W || cy * CONFIG.CHUNK_TILES >= CONFIG.MAP_H) continue;
+        if (cx * CONFIG.CHUNK_TILES >= CONFIG.WORLD_W || cy * CONFIG.CHUNK_TILES >= CONFIG.WORLD_H) continue;
         ctx.drawImage(this.getChunk(cx, cy), cx * S - this.camX, cy * S - this.camY);
       }
     }
@@ -235,7 +237,7 @@ const Render = {
 
   // 静态地面：画进 chunk（world 坐标 wx,wy → chunk 内像素 sx,sy）
   drawGroundInto(g, wx, wy, sx, sy) {
-    const t = World.tiles[wy][wx];
+    const t = World.tileAt(wx, wy);
     const jitter = ((wx * 7 + wy * 13) % 5) * 2 - 4;
     g.fillStyle = this.shade(this.COLORS[t], jitter);
     g.fillRect(sx, sy, CONFIG.TILE, CONFIG.TILE);
@@ -276,7 +278,7 @@ const Render = {
 
   // 静态建筑与树木：画进 chunk
   drawPropsInto(g, wx, wy, sx, sy) {
-    const t = World.tiles[wy][wx];
+    const t = World.tileAt(wx, wy);
     const cx = sx + CONFIG.TILE / 2;
     const by = sy + CONFIG.TILE;
 
@@ -380,8 +382,8 @@ const Render = {
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 1;
     ctx.strokeRect(pad + 0.5, pad + 0.5, size, size);
-    const mx = pad + (Player.x / (CONFIG.MAP_W * CONFIG.TILE)) * size;
-    const my = pad + (Player.y / (CONFIG.MAP_H * CONFIG.TILE)) * size;
+    const mx = pad + (Player.x / (CONFIG.WORLD_W * CONFIG.TILE)) * size;
+    const my = pad + (Player.y / (CONFIG.WORLD_H * CONFIG.TILE)) * size;
     ctx.fillStyle = '#ff3b30';
     ctx.beginPath();
     ctx.arc(mx, my, 3, 0, Math.PI * 2);
