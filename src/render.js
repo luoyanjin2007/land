@@ -12,7 +12,8 @@ const Render = {
   miniCanvas: null,
   sprites: {},                 // 贴图缓存 name -> Image
   chunkCache: new Map(),       // 地形 chunk 缓存 "cx,cy" -> canvas
-  CHUNK_HEAD: 56,              // chunk 画布顶部预留区：高处地形向上生长的空间
+  CHUNK_HEAD: 56,               // 正常世界
+  LAB_HEAD: 120,               // 实验室模式（山峰可达 2 格高）              // chunk 画布顶部预留区：高处地形向上生长的空间
   TIER: { 0: 0, 1: 1, 2: 1, 3: 1, 4: 3, 5: 1, 6: 1, 7: 1, 8: 1, 9: 1, 10: 2 }, // 地形海拔层级：WATER0 沙草林路1 丘陵2 山峰3
   maskCache: new Map(),        // 水格形状缓存 "cx,cy" -> canvas
 
@@ -150,13 +151,13 @@ const Render = {
     if (c) return c;
     c = document.createElement('canvas');
     const S = CONFIG.CHUNK_PX;
-    c.width = S; c.height = S + this.CHUNK_HEAD;   // 顶部预留：高处地形向上生长
+    c.width = S; c.height = S + (CONFIG.LAB ? 120 : 56);   // 顶部预留：高处地形向上生长
     const g = c.getContext('2d');
     for (let y = 0; y < CONFIG.CHUNK_TILES; y++) {
       for (let x = 0; x < CONFIG.CHUNK_TILES; x++) {
         const wx = cx * CONFIG.CHUNK_TILES + x, wy = cy * CONFIG.CHUNK_TILES + y;
         if (!World.inBounds(wx, wy)) continue;
-        const sx = x * CONFIG.TILE, sy = y * CONFIG.TILE + this.CHUNK_HEAD;
+        const sx = x * CONFIG.TILE, sy = y * CONFIG.TILE + (CONFIG.LAB ? 120 : 56);
         this.drawGroundInto(g, wx, wy, sx, sy);
         this.drawPropsInto(g, wx, wy, sx, sy);
       }
@@ -172,9 +173,9 @@ const Render = {
     let c = this.maskCache.get(k);
     if (c) return c;
     c = document.createElement('canvas');
-    c.width = CONFIG.CHUNK_PX; c.height = CONFIG.CHUNK_PX + this.CHUNK_HEAD;
+    c.width = CONFIG.CHUNK_PX; c.height = CONFIG.CHUNK_PX + (CONFIG.LAB ? 120 : 56);
     const g = c.getContext('2d');
-    g.translate(0, this.CHUNK_HEAD);
+    g.translate(0, (CONFIG.LAB ? 120 : 56));
     g.fillStyle = '#fff';
     for (let y = 0; y < CONFIG.CHUNK_TILES; y++) {
       for (let x = 0; x < CONFIG.CHUNK_TILES; x++) {
@@ -316,6 +317,57 @@ const Render = {
       else this.blitOn(g, 'house-2', cx, by - 2, 42, 42);
     }
     // 墙砖由地面层 TILE_IMG[WALL] 绘制（此前道具层错位重复绘制，已删）
+    else if (t === TILE_TYPE.MOUNTAIN) {
+      // 高耸山峰：向上生长的岩峰（悬崖岩壁纹理填充），高度由平滑噪声决定 → 连绵山脉
+      const n = World.n2 ? World.n2(wx, wy) : 0.5;
+      const hgt = (CONFIG.LAB ? 30 : 22) + n * (CONFIG.LAB ? 56 : 40);
+      const jx = (this.hash(wx, wy) - 0.5) * 10;
+      const cimg = this.sprites['tile-cliff-rock'];
+      if (cimg && cimg.complete && cimg.naturalWidth) {
+        const pat = g.createPattern(cimg, 'repeat');
+        g.beginPath();
+        g.moveTo(sx - 2, sy + CONFIG.TILE);
+        g.lineTo(sx + CONFIG.TILE / 2 + jx, sy + CONFIG.TILE - hgt);
+        g.lineTo(sx + CONFIG.TILE + 2, sy + CONFIG.TILE);
+        g.closePath();
+        g.fillStyle = pat;
+        g.fill();
+        // 明暗光照：左上受光、右下投影，让山峰从地面上立起来
+        const lg = g.createLinearGradient(sx, sy + CONFIG.TILE - hgt, sx + CONFIG.TILE, sy + CONFIG.TILE);
+        lg.addColorStop(0, 'rgba(255,250,240,.3)');
+        lg.addColorStop(0.55, 'rgba(0,0,0,0)');
+        lg.addColorStop(1, 'rgba(8,12,22,.5)');
+        g.fillStyle = lg;
+        g.fill();
+        g.strokeStyle = 'rgba(8,12,22,.6)';
+        g.lineWidth = 2;
+        g.stroke();
+        if (hgt > 52) {   // 高峰带雪顶
+          const ax = sx + CONFIG.TILE / 2 + jx;
+          g.beginPath();
+          g.moveTo(ax - 10, sy + CONFIG.TILE - hgt + 14);
+          g.lineTo(ax, sy + CONFIG.TILE - hgt);
+          g.lineTo(ax + 10, sy + CONFIG.TILE - hgt + 14);
+          g.closePath();
+          g.fillStyle = 'rgba(240,246,255,.95)';
+          g.fill();
+        }
+      }
+    }
+    else if (t === TILE_TYPE.HILL) {
+      // 丘陵：轻微隆起的缓坡包（可行走）
+      const hgt = 6 + (World.n3 ? World.n3(wx, wy) : 0.5) * 10;
+      const cimg = this.sprites['tile-cliff-hill'];
+      if (cimg && cimg.complete && cimg.naturalWidth) {
+        const pat = g.createPattern(cimg, 'repeat');
+        g.beginPath();
+        g.moveTo(sx - 1, sy + CONFIG.TILE);
+        g.quadraticCurveTo(sx + CONFIG.TILE / 2, sy + CONFIG.TILE - hgt * 2, sx + CONFIG.TILE + 1, sy + CONFIG.TILE);
+        g.closePath();
+        g.fillStyle = pat;
+        g.fill();
+      }
+    }
     else if (t === TILE_TYPE.FOUNTAIN) {
       this.blitOn(g, 'fountain', cx, by - 2, 40, 40);
     }

@@ -57,6 +57,13 @@ const World = {
     this.coast = makeNoiseLayer(this.W, this.H, 40, rng);// 海岸线扰动
     this.forestN = makeNoiseLayer(this.W, this.H, 18, rng); // 森林分布
 
+    if (CONFIG.LAB) {
+      // 【高度实验室】手工设计的高度场：中央大山，无城市
+      this.cities = [];
+      this.spawn = { x: 24, y: 34 };
+      return;
+    }
+
     // 六大地标（正史相对位置：圣魂村→诺丁城→史莱克在北，索托城中，
     // 武魂城在两帝国交界，星罗城在南）
     this.cities = [
@@ -144,6 +151,7 @@ const World = {
   // 核心：任意格子的地形类型（按需计算）
   tileAt(x, y) {
     if (!this.inBounds(x, y)) return TILE_TYPE.WATER;
+    if (CONFIG.LAB) return this.labTileAt(x, y);
 
     // 地标城市 + 城郊缓冲（优先级最高，保证城市不受海洋/群系侵蚀）
     const c = this.cityCovering(x, y);
@@ -200,6 +208,21 @@ const World = {
     }
     if (e < 0.68) return TILE_TYPE.HILL;    // 丘陵：可行走的山脚
     return TILE_TYPE.MOUNTAIN;              // 山峰：不可行走
+  },
+
+  // 【高度实验室】手工设计的高度场：
+  //   中央一座大山（主峰+山脊），向外依次丘陵 → 草原 → 沙滩 → 环湖
+  labTileAt(x, y) {
+    const cx = 24, cy = 17;                    // 山体中心
+    const d = Math.hypot(x - cx, y - cy);
+    if (d > 21) return TILE_TYPE.WATER;        // 外围环湖
+    let e = Math.max(0, 1 - d / 15);           // 0~1 高度
+    e = e * e * 1.15;                          // 陡峭化（平方）
+    e += (this.n2(x, y) - 0.5) * 0.2;          // 噪声细节让山脊不呆板
+    if (e > 0.60) return TILE_TYPE.MOUNTAIN;   // 主峰区
+    if (e > 0.32) return TILE_TYPE.HILL;       // 丘陵带
+    if (e > 0.08) return TILE_TYPE.GRASS;      // 草原
+    return TILE_TYPE.SAND;                     // 湖滩
   },
 
   // 可通行：山峰、树、建筑、城墙、喷泉阻挡；水可游泳通过，丘陵可走
