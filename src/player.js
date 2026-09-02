@@ -38,15 +38,21 @@ const Player = {
     this.tryMove(dx, 0);
     this.tryMove(0, dy);
 
-    // 入水瞬间：一个大圈；游泳中：身后持续小圈
+    // 入水瞬间：一个大圈；游泳中：沿前进路径左右交替荡开尾流（V 字水痕）
     if (this.inWater && !wasInWater) {
       Effects.spawnRipple(this.x, this.y, 16, 1.1, false);
       this.swimTimer = 0.2;
     } else if (this.inWater) {
       this.swimTimer -= dt;
       if (this.swimTimer <= 0) {
-        this.swimTimer = 0.26;
-        Effects.spawnRipple(this.x, this.y, 11, 0.9, false);
+        this.swimTimer = 0.2;
+        this.swimSide = !this.swimSide;
+        const off = this.swimSide ? 7 : -7;
+        // 垂直于前进方向的偏移：左右走时上下荡开，上下走时左右荡开
+        let ox = 0, oy = 0;
+        if (this.facing === 'left' || this.facing === 'right') oy = off;
+        else ox = off;
+        Effects.spawnRipple(this.x + ox, this.y + oy, 9, 0.85, false);
       }
     }
   },

@@ -32,6 +32,7 @@ const Render = {
     'player-up-0', 'player-up-1', 'player-up-2', 'player-up-3',
     'player-left-0', 'player-left-1', 'player-left-2', 'player-left-3',
     'player-right-0', 'player-right-1', 'player-right-2', 'player-right-3',
+    'player-swim-0', 'player-swim-1', 'player-swim-2', 'player-swim-3',
     'house-2', 'pagoda-2', 'fountain', 'tree-2',
     'tile-grass-1', 'tile-grass-2', 'tile-grass-3', 'tile-flower',
     'tile-road', 'tile-plaza', 'tile-sand', 'tile-water', 'tile-forest',
@@ -298,29 +299,34 @@ const Render = {
 
   drawPlayer(time) {
     const { ctx } = this;
+    const swimming = Player.inWater;
     let name;
-    if (!Player.moving) {
+    if (swimming) {
+      // 游泳贴图：水线已画进角色里，移动时循环划水帧，静止用漂浮帧
+      const frame = Player.moving ? 1 + (Math.floor(time / 140) % 3) : 0;
+      name = `player-swim-${frame}`;
+    } else if (!Player.moving) {
       name = `player-${Player.facing}-0`;
     } else {
       const frame = 1 + (Math.floor(time / 130) % 3);
       name = `player-${Player.facing}-${frame}`;
     }
     const img = this.sprites[name];
-    const swimming = Player.inWater;
 
-    // 陆上有影子；水里没有影子，靠水面覆盖表现浸入感
+    // 陆上有影子；水里没有影子（贴图自带浸水感）
     if (!swimming) this.shadow(Player.x - this.camX, Player.y - this.camY + 12, 9);
 
-    // 游泳时体型略小、整体下沉，并带轻微浮沉起伏
-    const h = swimming ? 30 : 40;
+    const h = swimming ? 42 : 40;
     const w = img && img.naturalWidth ? h * img.naturalWidth / img.naturalHeight : 24;
     const bob = swimming
       ? Math.sin(time / 320) * 1.6
       : (Player.moving ? Math.sin(time / 90) * 2 : 0);
-    const sink = swimming ? 8 : 0;
+    const sink = swimming ? 5 : 0;
 
     ctx.save();
     ctx.translate(Player.x - this.camX, Player.y - this.camY + 20 - h / 2 + sink + bob);
+    // 游泳贴图默认朝右：朝左走时镜像
+    if (swimming && Player.facing === 'left') ctx.scale(-1, 1);
     if (img && img.complete && img.naturalWidth) {
       ctx.drawImage(img, -w / 2, -h / 2, w, h);
     } else {
@@ -328,18 +334,6 @@ const Render = {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('🧍', 0, 0);
-    }
-    // 水面覆盖：半透明水色盖住下半身 + 一条白色水线（只在游泳时）
-    if (swimming) {
-      ctx.fillStyle = 'rgba(45,95,145,.45)';
-      ctx.beginPath();
-      ctx.ellipse(0, h * 0.34, w * 0.56, h * 0.26, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(225,242,255,.5)';
-      ctx.lineWidth = 1.3;
-      ctx.beginPath();
-      ctx.ellipse(0, h * 0.34, w * 0.56, h * 0.26, 0, Math.PI, Math.PI * 2);
-      ctx.stroke();
     }
     ctx.restore();
   },

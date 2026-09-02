@@ -106,6 +106,7 @@ async function main() {
     await sliceFrames('角色四方向图集.jpeg', 'player-down', 0);
     await sliceFrames('角色背面图集.jpeg', 'player-up');       // 横向条带
     await sliceFrames('角色右向图集.jpeg', 'player-right');    // 横向条带
+    await sliceFrames('角色游泳图集.jpeg', 'player-swim');     // 游泳：横向条带
     // 朝左 = 朝右镜像
     for (let c = 0; c < 4; c++) {
       const cell = await Jimp.read(path.join(OUT, `player-right-${c}.png`));
