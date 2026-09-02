@@ -172,9 +172,9 @@ const Effects = {
     this.skyTiled = c;
   },
 
-  spawnRipple(wx, wy, max, life, land) {    // 池上限防爆
+  spawnRipple(wx, wy, max, life, land, alpha = 0.55) {    // 池上限防爆
     if (this.ripples.length > 320) this.ripples.shift();
-    this.ripples.push({ x: wx, y: wy, t: 0, life, max, land: !!land });
+    this.ripples.push({ x: wx, y: wy, t: 0, life, max, land: !!land, a: alpha });
   },
 
   // 雨滴溅起的水珠：直接画在主画布上（不经过水面裁剪层），陆地上也可见
@@ -250,7 +250,7 @@ const Effects = {
       if (p < 0.35) continue;
       const q = (p - 0.35) / 0.65;
       const px = r.x - Render.camX, py = r.y - Render.camY;
-      fx.globalAlpha = (1 - q) * 0.55;
+      fx.globalAlpha = (1 - q) * (r.a || 0.55);
       fx.beginPath();
       fx.ellipse(px, py, r.max * (0.3 + 0.7 * q) + 1, (r.max * (0.3 + 0.7 * q) + 1) * 0.55, 0, 0, Math.PI * 2);
       fx.stroke();

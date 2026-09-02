@@ -16,6 +16,16 @@ const Player = {
     const ax = Input.axisX();
     const ay = Input.axisY();
     this.moving = ax !== 0 || ay !== 0;
+
+    // 静止漂浮在水中：缓慢荡开小而淡的涟漪（呼吸感）
+    if (this.inWater && !this.moving) {
+      this.idleTimer = (this.idleTimer || 0) - dt;
+      if (this.idleTimer <= 0) {
+        this.idleTimer = 0.8;
+        Effects.spawnRipple(this.x, this.y, 8, 1.2, false, 0.35);
+      }
+    }
+
     if (!this.moving) return;
     // 朝向 = 本帧的主移动方向（松开按键后保持最后朝向）
     if (Math.abs(ax) >= Math.abs(ay)) {
@@ -38,26 +48,25 @@ const Player = {
     this.tryMove(dx, 0);
     this.tryMove(0, dy);
 
-    // 入水瞬间：一个大圈；游泳中：身后拖出明显的 V 字尾流
-    // 尾流圈要明显大于雨滴涟漪，且快速消散（不残留到很远的地方）
+    // 入水瞬间：一个大圈；游泳中：身后拖出大而深的 V 字尾流（密集生成）
     if (this.inWater && !wasInWater) {
-      Effects.spawnRipple(this.x, this.y, 24, 0.8, false);
-      this.swimTimer = 0.15;
+      Effects.spawnRipple(this.x, this.y, 24, 0.8, false, 0.85);
+      this.swimTimer = 0.1;
       this.swimSide = false;
     } else if (this.inWater) {
       this.swimTimer -= dt;
       if (this.swimTimer <= 0) {
-        this.swimTimer = 0.18;
+        this.swimTimer = 0.13;
         // 身后位置（前进的反方向）
-        const backX = this.facing === 'left' ? 12 : this.facing === 'right' ? -12 : 0;
-        const backY = this.facing === 'up' ? 12 : this.facing === 'down' ? -12 : 0;
+        const backX = this.facing === 'left' ? 26 : this.facing === 'right' ? -26 : 0;
+        const backY = this.facing === 'up' ? 26 : this.facing === 'down' ? -26 : 0;
         // 左右交替的侧向偏移（垂直于前进方向），形成 V 字水痕
         this.swimSide = !this.swimSide;
         const side = this.swimSide ? 9 : -9;
         const perpX = (this.facing === 'up' || this.facing === 'down') ? side : 0;
         const perpY = (this.facing === 'left' || this.facing === 'right') ? side : 0;
-        Effects.spawnRipple(this.x + backX, this.y + backY, 22, 0.55, false);
-        Effects.spawnRipple(this.x + backX + perpX, this.y + backY + perpY, 16, 0.45, false);
+        Effects.spawnRipple(this.x + backX, this.y + backY, 26, 0.6, false, 0.85);
+        Effects.spawnRipple(this.x + backX + perpX, this.y + backY + perpY, 18, 0.5, false, 0.7);
       }
     }
   },
