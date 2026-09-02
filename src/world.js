@@ -74,6 +74,8 @@ const World = {
 
     // 城际道路
     this.generateRoads(seed);
+    // 风景湖（道路穿湖 → 湖中段成为木桥）
+    this.placeScenicLakes(rng);
   },
 
   inBounds(x, y) { return x >= 0 && y >= 0 && x < this.W && y < this.H; },
@@ -167,6 +169,48 @@ const World = {
         }
       }
     }
+  },
+
+  // 风景湖：在远离城市的野外道路上放置小湖，道路从湖上穿过 → 湖中段自动成为木桥
+  placeScenicLakes(rng) {
+    this.lakes = [];
+    const far = [];
+    for (const k of this.roadTiles) {
+      const [x, y] = k.split(',').map(Number);
+      let okDist = true;
+      for (const c of this.cities) {
+        if (Math.abs(x - (c.x + c.w / 2)) < 46 && Math.abs(y - (c.y + c.h / 2)) < 46) { okDist = false; break; }
+      }
+      const tHere = this.tileAt(x, y);
+      if (okDist && this.inBounds(x, y) &&
+          tHere !== TILE_TYPE.WATER && tHere !== TILE_TYPE.MOUNTAIN) far.push({ x, y });
+    }
+    // 打乱（确定性），取相距足够远的两处放湖
+    far.sort((a, b) => this.hash(a.x, a.y) - this.hash(b.x, b.y));
+    const chosen = [];
+    for (const s of far) {
+      if (chosen.every(c => Math.hypot(c.x - s.x, c.y - s.y) > 120)) {
+        chosen.push(s);
+        if (chosen.length >= 2) break;
+      }
+    }
+    for (const s of chosen) {
+      this.lakes.push({ x: s.x, y: s.y, rx: 7 + Math.floor(rng() * 4), ry: 5 + Math.floor(rng() * 3) });
+    }
+    // 道路穿湖的格子 = 桥面
+    for (const k of this.roadTiles) {
+      if (this.inLakeRaw(k.split(',')[0] * 1, k.split(',')[1] * 1)) this.bridgeTiles.add(k);
+    }
+  },
+
+  // 是否在风景湖范围内（含噪声边缘）
+  inLakeRaw(x, y) {
+    if (!this.lakes) return false;
+    for (const l of this.lakes) {
+      const ddx = (x - l.x) / l.rx, ddy = (y - l.y) / l.ry;
+      if (ddx * ddx + ddy * ddy < 1 + (this.coast(x, y) - 0.5) * 0.25) return true;
+    }
+    return false;
   },
 
   // 生成全部城际道路（正史路线：圣魂村→诺丁城→史莱克/索托→武魂城→星罗城）

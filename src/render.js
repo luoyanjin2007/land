@@ -255,10 +255,10 @@ const Render = {
     const night = Ambience.nightLevel(time);
     Ambience.draw(time);
     if (night > 0.02) {
-      ctx.fillStyle = `rgba(10,15,40,${night * 0.42})`;
+      ctx.fillStyle = `rgba(10,15,40,${night * 0.5})`;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       // 窗户亮灯（夜晚才开灯，窗口位置固定在房屋上部）
-      if (night > 0.25) {
+      if (night > 0.15) {
         for (let wy = cy0; wy <= cy1; wy++) {
           for (let wx = cx0; wx <= cx1; wx++) {
             if (World.tileAt(wx, wy) !== TILE_TYPE.HOUSE) continue;
@@ -266,7 +266,7 @@ const Render = {
             if (hv < 0.35) continue;   // 有些屋子没开灯
             const sx = wx * CONFIG.TILE - this.camX;
             const sy = wy * CONFIG.TILE - this.camY - 2;
-            ctx.fillStyle = `rgba(255,214,120,${(night - 0.2) * 1.1})`;
+            ctx.fillStyle = `rgba(255,214,120,${Math.min(1, (night - 0.05) * 1.6)})`;
             ctx.fillRect(sx + 7, sy + 6, 5, 6);
             ctx.fillRect(sx + 20, sy + 6, 5, 6);
           }
@@ -399,21 +399,21 @@ const Render = {
       for (let wx = x0; wx < x1; wx++) {
         if (World.tileAt(wx, wy) !== TILE_TYPE.GRASS) continue;
         const hv = this.hash(wx, wy);
-        if (hv < 0.87) continue;
+        if (hv < 0.80) continue;
         const bx = wx * T + 4 + hv * 18 - this.camX;
         const by = wy * T + 26 - this.camY;
         // 风摆（草更轻，摆得更快）+ 人物拨动
-        const wind = Math.sin(time / 420 + wx * 0.09 + wy * 0.05) * 2.2;
+        const wind = Math.sin(time / 420 + wx * 0.09 + wy * 0.05) * 3.2;
         const pdx = wx * T + T / 2 - Player.x, pdy = wy * T + T - Player.y;
         const d = Math.hypot(pdx, pdy);
         let bend = wind;
         if (d < 56) bend += -(pdx / (d || 1)) * (1 - d / 56) * 5;
-        ctx.strokeStyle = 'rgba(46,110,50,.85)';
-        ctx.lineWidth = 1.2;
+        ctx.strokeStyle = 'rgba(36,100,44,.9)';
+        ctx.lineWidth = 1.6;
         for (const b of [-3, 0, 3]) {
           ctx.beginPath();
           ctx.moveTo(bx + b, by);
-          ctx.quadraticCurveTo(bx + b + bend * 0.5, by - 5, bx + b + bend, by - 9);
+          ctx.quadraticCurveTo(bx + b + bend * 0.5, by - 7, bx + b + bend, by - 13);
           ctx.stroke();
         }
       }

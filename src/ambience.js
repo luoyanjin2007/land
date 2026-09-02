@@ -22,24 +22,24 @@ const Ambience = {
     // ---- 落叶：视野内随机森林格飘落叶子 ----
     this.leafTimer -= dt;
     if (this.leafTimer <= 0) {
-      this.leafTimer = 0.45;
+      this.leafTimer = 0.22;
       const wx = Render.camX + Math.random() * innerWidth;
       const wy = Render.camY + Math.random() * innerHeight;
       const tx = Math.floor(wx / CONFIG.TILE), ty = Math.floor(wy / CONFIG.TILE);
       if (World.tileAt(tx, ty) === TILE_TYPE.FOREST) {
         this.leaves.push({
           x: wx, y: wy - 26 - Math.random() * 34,
-          vy: 26 + Math.random() * 20, t: 0, life: 2.1,
+          vy: 24 + Math.random() * 20, t: 0, life: 2.4,
           sway: Math.random() * 6.28,
-          size: 2 + Math.random() * 2,
-          col: Math.random() < 0.22 ? '210,150,60' : '150,200,90',
+          size: 3 + Math.random() * 2,
+          col: Math.random() < 0.35 ? '215,145,55' : '150,200,90',
         });
       }
     }
     for (const l of this.leaves) {
       l.t += dt;
       l.y += l.vy * dt;
-      l.x += Math.sin(time / 420 + l.sway) * 15 * dt;
+      l.x += Math.sin(time / 420 + l.sway) * 22 * dt;
     }
     this.leaves = this.leaves.filter(l => l.t < l.life);
     if (this.leaves.length > 46) this.leaves.splice(0, this.leaves.length - 46);
@@ -54,7 +54,7 @@ const Ambience = {
     this.birds = this.birds.filter(b => b.t < b.life);
 
     // ---- 萤火虫：夜晚维持一小群，白天淡出 ----
-    const want = Math.floor(night * 14);
+    const want = Math.floor(night * 22);
     this.flyTimer -= dt;
     if (this.flies.length < want && this.flyTimer <= 0) {
       this.flyTimer = 0.25;
@@ -128,13 +128,13 @@ const Ambience = {
     for (const f of this.flies) {
       const a = night * (0.35 + 0.65 * Math.abs(Math.sin(time / 640 + f.phase)));
       const sx = f.x - Render.camX, sy = f.y - Render.camY;
-      ctx.fillStyle = `rgba(190,255,130,${a * 0.25})`;
+      ctx.fillStyle = `rgba(190,255,130,${a * 0.4})`;
       ctx.beginPath();
-      ctx.arc(sx, sy, 4.5, 0, Math.PI * 2);
+      ctx.arc(sx, sy, 6, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = `rgba(220,255,150,${a})`;
       ctx.beginPath();
-      ctx.arc(sx, sy, 1.6, 0, Math.PI * 2);
+      ctx.arc(sx, sy, 2.2, 0, Math.PI * 2);
       ctx.fill();
     }
   },
