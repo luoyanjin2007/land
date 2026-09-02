@@ -9,6 +9,7 @@
   Player.init();
   Render.init(document.getElementById('game'));
   Effects.init();
+  Player.x = 262.5 * CONFIG.TILE; Player.y = 181.5 * CONFIG.TILE; // DEBUG
 
   // 3. 开场画面：点击「开始探索」才接管操作
   let started = false;

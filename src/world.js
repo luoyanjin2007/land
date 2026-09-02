@@ -288,11 +288,11 @@ const World = {
       // 边缘之外落到底部基础地形
     }
 
-    // 基础地形：起伏决定草原/碎林/湖泊/山
+    // 基础地形：起伏决定草原/碎林/湖泊/山（山峰只在最高的地方出现）
     const e = this.n1(x, y) * 0.55 + this.n2(x, y) * 0.3 + this.n3(x, y) * 0.15;
     if (e < 0.30) return TILE_TYPE.WATER;   // 内陆湖
     if (e < 0.33) return TILE_TYPE.SAND;    // 湖岸
-    if (e < 0.55) {
+    if (e < 0.68) {
       return this.forestN(x, y) > 0.68 ? TILE_TYPE.FOREST : TILE_TYPE.GRASS;
     }
     return TILE_TYPE.MOUNTAIN;
