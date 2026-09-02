@@ -9,6 +9,7 @@
   Player.init();
   Render.init(document.getElementById('game'));
   Effects.init();
+  WorldMap.init();
   Player.x = 215.5 * CONFIG.TILE; Player.y = 141.5 * CONFIG.TILE; // DEBUG
 
   // 3. 开场画面：点击「开始探索」才接管操作
@@ -24,6 +25,7 @@
     const dt = Math.min(0.05, (now - last) / 1000); // 上限 50ms 防止切标签页后暴走
     last = now;
     if (started) Player.update(dt);
+    WorldMap.reveal(Player.x, Player.y);
     Effects.update(dt, now);
     Render.updateCamera(dt);
     Render.draw(now);

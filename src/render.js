@@ -88,7 +88,7 @@ const Render = {
 
   // 小地图：抽样渲染整个世界（每 2 格采 1 像素 → 400×400，只画一次）
   bakeMinimap() {
-    const STEP = 2;
+    const STEP = 1;
     const c = document.createElement('canvas');
     c.width = Math.ceil(CONFIG.WORLD_W / STEP);
     c.height = Math.ceil(CONFIG.WORLD_H / STEP);
@@ -100,6 +100,11 @@ const Render = {
       }
     }
     this.miniCanvas = c;
+  },
+
+  // 小地图的迷雾缓存（未探索区域不显示）——实际内容在 WorldMap.fogMini
+  foggedMini() {
+    return (typeof WorldMap !== 'undefined' && WorldMap.fogMini) ? WorldMap.fogMini : this.miniCanvas;
   },
 
   snapCamera() {
@@ -228,6 +233,9 @@ const Render = {
 
     this.drawMinimap();
     this.drawHUD();
+
+    // 世界地图覆盖层（M 键开关，最顶层）
+    WorldMap.drawOverlay(time);
   },
 
   // 坐标哈希：同一个格子永远得到同一个随机数
@@ -372,23 +380,69 @@ const Render = {
     }
   },
 
+  // 雷达式小地图：以人物为中心的局部地图，随移动滚动；
+  // 显示范围与迷雾揭露范围一致；未探索区域涂黑；范围内的城市显示名字
   drawMinimap() {
     const size = 160;
     const pad = 10;
+    const VIEW = 64;                    // 小地图视野：64×64 格
     const { ctx } = this;
+    const cx = Player.x / CONFIG.TILE, cy = Player.y / CONFIG.TILE;
+    const x0 = cx - VIEW / 2, y0 = cy - VIEW / 2;
+    const px2s = size / VIEW;           // 格 → 屏幕像素
+
     ctx.save();
-    ctx.globalAlpha = 0.9;
-    ctx.drawImage(this.miniCanvas, pad, pad, size, size);
+    ctx.beginPath();
+    ctx.rect(pad, pad, size, size);
+    ctx.clip();
+    // 底色（未探索=深色）
+    ctx.fillStyle = '#0d1526';
+    ctx.fillRect(pad, pad, size, size);
+    // 局部地形（1px/格 的世界图采样，越界自动钳制）
+    const hi = this.miniCanvas;
+    const sx = Math.max(0, Math.min(hi.width - VIEW, Math.round(x0)));
+    const sy = Math.max(0, Math.min(hi.height - VIEW, Math.round(y0)));
+    ctx.drawImage(hi, sx, sy, VIEW, VIEW, pad, pad, size, size);
+
+    // 迷雾：未探索的迷雾格涂黑
+    if (typeof WorldMap !== 'undefined' && WorldMap.fog) {
+      ctx.fillStyle = '#0d1526';
+      const fw = WorldMap.FW;
+      for (let fy = 0; fy < WorldMap.FH; fy++) {
+        for (let fx = 0; fx < fw; fx++) {
+          if (WorldMap.exploredAt(fx, fy)) continue;
+          const wx0 = fx * WorldMap.CELL, wy0 = fy * WorldMap.CELL;
+          ctx.fillRect(
+            pad + (wx0 - x0) * px2s, pad + (wy0 - y0) * px2s,
+            WorldMap.CELL * px2s + 0.5, WorldMap.CELL * px2s + 0.5
+          );
+        }
+      }
+    }
+
+    // 范围内的城市标注
+    ctx.font = '10px "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    for (const c of World.cities) {
+      const ccx = c.x + c.w / 2, ccy = c.y + c.h / 2;
+      if (Math.abs(ccx - cx) > VIEW / 2 || Math.abs(ccy - cy) > VIEW / 2) continue;
+      const fx = Math.floor(ccx / WorldMap.CELL), fy = Math.floor(ccy / WorldMap.CELL);
+      if (typeof WorldMap !== 'undefined' && !WorldMap.exploredAt(fx, fy)) continue;
+      const px = pad + (ccx - x0) * px2s;
+      const py = pad + (ccy - y0) * px2s;
+      ctx.fillStyle = '#ffe9a8';
+      ctx.fillText(c.name, px, py - 8);
+    }
+    ctx.restore();
+
+    // 边框 + 人物中心红点
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 1;
     ctx.strokeRect(pad + 0.5, pad + 0.5, size, size);
-    const mx = pad + (Player.x / (CONFIG.WORLD_W * CONFIG.TILE)) * size;
-    const my = pad + (Player.y / (CONFIG.WORLD_H * CONFIG.TILE)) * size;
     ctx.fillStyle = '#ff3b30';
     ctx.beginPath();
-    ctx.arc(mx, my, 3, 0, Math.PI * 2);
+    ctx.arc(pad + size / 2, pad + size / 2, 3, 0, Math.PI * 2);
     ctx.fill();
-    ctx.restore();
   },
 
   drawHUD() {
@@ -402,7 +456,7 @@ const Render = {
       `位置 (${Player.tileX()}, ${Player.tileY()})  ` +
       (city ? `🏘️ ${city}  ` : '') +
       (Player.inWater ? '🏊 游泳中  ' : '') +
-      `${Input.running() ? '🏃奔跑中' : '🚶步行'}  Shift 加速`,
+      `${Input.running() ? '🏃奔跑中' : '🚶步行'}  M 世界地图`,
       180, 24
     );
   },
