@@ -210,19 +210,26 @@ const World = {
     return TILE_TYPE.MOUNTAIN;              // 山峰：不可行走
   },
 
-  // 【高度实验室】手工设计的高度场：
-  //   中央一座大山（主峰+山脊），向外依次丘陵 → 草原 → 沙滩 → 环湖
-  labTileAt(x, y) {
-    const cx = 24, cy = 17;                    // 山体中心
+  // 【高度实验室】连续高度场：中央大山，向外丘陵 → 草原 → 沙滩 → 环湖
+  labElev(x, y) {
+    const cx = 24, cy = 17;
     const d = Math.hypot(x - cx, y - cy);
-    if (d > 21) return TILE_TYPE.WATER;        // 外围环湖
-    let e = Math.max(0, 1 - d / 15);           // 0~1 高度
-    e = e * e * 1.15;                          // 陡峭化（平方）
-    e += (this.n2(x, y) - 0.5) * 0.2;          // 噪声细节让山脊不呆板
+    if (d > 21) return 0;                      // 外围环湖（高度 0）
+    let e = Math.max(0, 1 - d / 15);
+    e = e * e * 1.15;                          // 陡峭化
+    e += (this.n2(x, y) - 0.5) * 0.2;          // 山脊噪声
+    return Math.max(0, Math.min(1.15, e));
+  },
+
+  labTileAt(x, y) {
+    const d = Math.hypot(x - 24, y - 17);
+    if (d > 21) return TILE_TYPE.WATER;        // 外围环湖（区分「湖」与「滩」）
+    const e = this.labElev(x, y);
+    if (e < 0.05) return TILE_TYPE.SAND;       // 湖滩
     if (e > 0.60) return TILE_TYPE.MOUNTAIN;   // 主峰区
     if (e > 0.32) return TILE_TYPE.HILL;       // 丘陵带
     if (e > 0.08) return TILE_TYPE.GRASS;      // 草原
-    return TILE_TYPE.SAND;                     // 湖滩
+    return TILE_TYPE.SAND;
   },
 
   // 可通行：山峰、树、建筑、城墙、喷泉阻挡；水可游泳通过，丘陵可走

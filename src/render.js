@@ -190,7 +190,167 @@ const Render = {
     return c;
   },
 
-  // ---------- 每帧绘制 ----------
+  // ---------- 【高度实验室】伪 3D 烘焙 ----------
+  // 原理：整张世界是一张连续高度场 e(x,y)。
+  //   顶面：每格地面画在 屏幕Y = 格子Y − e×缩放（高处整体上移）
+  //   侧壁：相邻格子的高度差自动产生断崖（悬崖纹理填充）
+  //   顺序：地面(全体) → 侧壁(全体) → 道具(按行排序) —— 画家算法
+  // 一次烘焙成整张大画布，之后每帧只需贴可见区域（48×48 实验室专用）
+
+  headPx() { return CONFIG.LAB ? 140 : 56; },
+  // 斜视角参数：顶面压扁比例（≈cos30°），立面因此大面积可见
+  KY() { return CONFIG.LAB ? 0.62 : 1; },
+  PITCH() { return CONFIG.TILE * this.KY(); },   // 行间距（压扁后的顶面高度）
+
+  labBake() {
+    if (this._labBaked) return;
+    const T = CONFIG.TILE, W = CONFIG.WORLD_W, H = CONFIG.WORLD_H;
+    const HEAD = this.headPx();
+    const P = this.PITCH();   // 压扁后的行间距
+    const HS = 56;   // 高度缩放：每单位高度上移的像素
+
+    // 1. 原始高度场 + 两轮箱式平滑（让侧壁高度渐变，山坡圆润）
+    const raw = [];
+    for (let y = 0; y < H; y++) {
+      raw[y] = [];
+      for (let x = 0; x < W; x++) raw[y][x] = World.labElev(x, y);
+    }
+    let sm = raw;
+    for (let pass = 0; pass < 2; pass++) {
+      const out = [];
+      for (let y = 0; y < H; y++) {
+        out[y] = [];
+        for (let x = 0; x < W; x++) {
+          let s = 0, n = 0;
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const nx = x + dx, ny = y + dy;
+              if (nx >= 0 && ny >= 0 && nx < W && ny < H) { s += sm[ny][nx]; n++; }
+            }
+          }
+          out[y][x] = s / n;
+        }
+      }
+      sm = out;
+    }
+    this._labElevSm = sm;   // 人物绘制也要按高度位移
+
+    // 2. 画布
+    const c = document.createElement('canvas');
+    c.width = W * T; c.height = H * P + HEAD;
+    const g = c.getContext('2d');
+    g.fillStyle = '#0a1a2e';
+    g.fillRect(0, 0, c.width, c.height);
+
+    // 顶面 Y 表
+    const topY = [];
+    for (let y = 0; y < H; y++) {
+      topY[y] = [];
+      for (let x = 0; x < W; x++) topY[y][x] = y * P + HEAD - sm[y][x] * HS;
+    }
+
+    // 3. 斜投影柱体：每格画 顶面 + 南立面 + 东立面
+    //    相机从东南方向 30° 俯视：高度让顶面向左上偏移 (OX,OY)
+    //    相邻格子的顶面互相覆盖 → 只有朝向相机的立面露出来
+    const OX = 10, OY = 22;   // 每单位高度的屏幕偏移（水平/垂直）
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const t = World.tileAt(x, y);
+        const e = sm[y][x];
+        const vx = -OX * e, vy = -OY * e;
+        const bx = x * T, by = y * P + HEAD;
+        if (e < 0.02) {
+          // 平地：只画顶面
+          const imgs = this.TILE_IMG[t];
+          const name = imgs[Math.floor(this.hash(x, y) * imgs.length)];
+          const img = this.sprites[name];
+          if (img && img.complete && img.naturalWidth) {
+            g.drawImage(img, bx, by, T, P);
+          }
+          continue;
+        }
+        const cimg = this.sprites[t === TILE_TYPE.MOUNTAIN ? 'tile-cliff-rock'
+          : t === TILE_TYPE.HILL ? 'tile-cliff-hill'
+          : t === TILE_TYPE.SAND ? 'tile-cliff-sand' : 'tile-cliff-grass'];
+        const pat = (cimg && cimg.complete && cimg.naturalWidth)
+          ? g.createPattern(cimg, 'repeat') : this.COLORS[t];
+
+        // 南立面（先画，被顶面和东邻覆盖多余部分）
+        g.beginPath();
+        g.moveTo(bx + vx, by + vy + P);
+        g.lineTo(bx + T + vx, by + vy + P);
+        g.lineTo(bx + T, by + P);
+        g.lineTo(bx, by + P);
+        g.closePath();
+        g.fillStyle = pat;
+        g.fill();
+        g.fillStyle = 'rgba(10,14,24,.3)';
+        g.fill();
+
+        // 东立面（更暗，背光面）
+        g.beginPath();
+        g.moveTo(bx + T, by);
+        g.lineTo(bx + T + vx, by + vy);
+        g.lineTo(bx + T + vx, by + vy + P);
+        g.lineTo(bx + T, by + P);
+        g.closePath();
+        g.fillStyle = pat;
+        g.fill();
+        g.fillStyle = 'rgba(10,14,24,.45)';
+        g.fill();
+
+        // 顶面（最后画，盖住立面的上边缘）
+        const imgs = this.TILE_IMG[t];
+        const name = imgs[Math.floor(this.hash(x, y) * imgs.length)];
+        const img = this.sprites[name];
+        if (img && img.complete && img.naturalWidth) {
+          g.drawImage(img, bx + vx, by + vy, T, P);
+        } else {
+          g.fillStyle = this.COLORS[t];
+          g.fillRect(bx + vx, by + vy, T, P);
+        }
+        // 高峰雪顶（带抖动，避免等值线图案）
+        if (t === TILE_TYPE.MOUNTAIN && e + (this.hash(x, y) - 0.5) * 0.08 > 0.93) {
+          g.fillStyle = 'rgba(240,246,255,.55)';
+          g.fillRect(bx + vx, by + vy, T, P);
+        }
+      }
+    }
+
+    // 5. 道具（按行排序，树等；实验室里种几棵树当参照物）
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (World.tileAt(x, y) === TILE_TYPE.FOREST ||
+            (World.tileAt(x, y) === TILE_TYPE.GRASS && this.hash(x, y) > 0.93)) {
+          const size = 30 + this.hash(x, y) * 12;
+          const img = this.sprites['tree-2'];
+          if (img && img.complete && img.naturalWidth) {
+            g.drawImage(img, x * T + T / 2 - size * 0.4, topY[y][x] + P - size, size * 0.8, size);
+          }
+        }
+      }
+    }
+
+    // 6. 水面蒙版（一次性，供云影/涟漪裁剪）
+    const m = document.createElement('canvas');
+    m.width = c.width; m.height = c.height;
+    const mg = m.getContext('2d');
+    mg.fillStyle = '#fff';
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (World.tileAt(x, y) === TILE_TYPE.WATER) {
+          mg.fillRect(x * T, topY[y][x], T, P);
+        }
+      }
+    }
+    this.labMask = m;
+
+    // 7. 让 drawWaterFX 用整张蒙版（实验室模式跳过 chunk 拼装）
+    this._labMaskMode = true;
+
+    this.labCanvas = c;
+    this._labBaked = true;
+  },
 
   draw(time) {
     const { ctx, canvas } = this;
@@ -203,6 +363,24 @@ const Render = {
       ctx.font = '16px "Microsoft YaHei", sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('素材加载中…', canvas.width / 2, canvas.height / 2);
+      return;
+    }
+
+    // 【高度实验室】整张世界一次性烘焙（伪 3D 位移渲染 + 画家算法）
+    if (CONFIG.LAB) {
+      this.labBake();
+      ctx.fillStyle = '#0a1a2e';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(this.labCanvas, -this.camX, Render.headPx() - this.camY);
+      const lc0 = 0, lr0 = 0;
+      const lc1 = Math.ceil(CONFIG.WORLD_W / CONFIG.CHUNK_TILES) - 1;
+      const lr1 = Math.ceil(CONFIG.WORLD_H / CONFIG.CHUNK_TILES) - 1;
+      Effects.drawWaterFX(lc0, lr0, lc1, lr1, time);
+      Effects.drawSplashes();
+      this.drawPlayer(time);
+      Effects.drawRain();
+      this.drawMinimap();
+      this.drawHUD();
       return;
     }
 
@@ -376,6 +554,13 @@ const Render = {
   drawPlayer(time) {
     const { ctx } = this;
     const swimming = Player.inWater;
+    // 实验室模式：人物也按所在格子的高度位移（站得高画得高）
+    let elevOff = 0;
+    if (CONFIG.LAB && this._labElevSm) {
+      const tx = Math.max(0, Math.min(CONFIG.WORLD_W - 1, Player.tileX()));
+      const ty = Math.max(0, Math.min(CONFIG.WORLD_H - 1, Player.tileY()));
+      elevOff = -(this._labElevSm[ty][tx] || 0) * 56;
+    }
     let name;
     let flip = false;
     if (swimming) {
@@ -407,21 +592,21 @@ const Render = {
       const hCrop = 40 * CROP;
       const bob = !Player.moving ? Math.sin(time / 320) * 1.6 : 0; // 静止漂浮起伏
       ctx.save();
-      ctx.translate(Player.x - this.camX, Player.y - this.camY + 4 + bob);
+      ctx.translate(Player.x - this.camX, Player.y - this.camY + 4 + bob + (elevOff || 0));
       if (flip) ctx.scale(-1, 1);
       ctx.drawImage(img, 0, 0, iw, ih * CROP, -w / 2, -hCrop, w, hCrop);
       ctx.restore();
       return;
     }
 
-    this.shadow(Player.x - this.camX, Player.y - this.camY + 12, 9);
+    this.shadow(Player.x - this.camX, Player.y - this.camY + 12 + (elevOff || 0), 9);
 
     const h = 40;
     const w = img.naturalWidth ? h * img.naturalWidth / img.naturalHeight : 24;
     const bob = !Player.moving ? Math.sin(time / 320) * 1.6 : Math.sin(time / 90) * 2;
 
     ctx.save();
-    ctx.translate(Player.x - this.camX, Player.y - this.camY + 20 - h / 2 + bob);
+    ctx.translate(Player.x - this.camX, Player.y - this.camY + 20 - h / 2 + bob + (elevOff || 0));
     if (flip) ctx.scale(-1, 1);
     ctx.drawImage(img, -w / 2, -h / 2, w, h);
     ctx.restore();

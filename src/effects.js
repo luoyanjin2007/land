@@ -207,9 +207,14 @@ const Effects = {
     // 1. 蒙版层：可见 chunk 的水格形状拼贴（每帧十几次 blit，替代上千次 fillRect）
     const mask = this.maskCanvas.getContext('2d');
     mask.clearRect(0, 0, this.maskCanvas.width, this.maskCanvas.height);
-    for (let cy = cy0; cy <= cy1; cy++) {
-      for (let cx = cx0; cx <= cx1; cx++) {
-        mask.drawImage(Render.getWaterMask(cx, cy), cx * S - Render.camX, cy * S - Render.camY);
+    if (Render._labMaskMode) {
+      // 实验室模式：整张烘焙蒙版一次贴上
+      mask.drawImage(Render.labMask, -Render.camX, Render.headPx() - Render.camY);
+    } else {
+      for (let cy = cy0; cy <= cy1; cy++) {
+        for (let cx = cx0; cx <= cx1; cx++) {
+          mask.drawImage(Render.getWaterMask(cx, cy), cx * S - Render.camX, cy * S - Render.camY);
+        }
       }
     }
 
