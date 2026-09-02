@@ -74,7 +74,7 @@ async function main() {
   }
 
   // 每个朝向 4 帧，切完统一垫到相同画布（脚底对齐、水平居中）再缩放
-  async function sliceFrames(file, prefix, gridRow) {
+  async function sliceFrames(file, prefix, gridRow, rowCount = 4) {
     const src = await Jimp.read(path.join(ROOT, 'assets', file));
     const n = 4;
     const cw = Math.floor(src.bitmap.width / n);
@@ -86,7 +86,7 @@ async function main() {
         cell = await cutFrame(src, c * cw, 0, cw, src.bitmap.height);
       } else {
         // 4×4 网格图集：取指定行的 4 格
-        const ch = Math.floor(src.bitmap.height / n);
+        const ch = Math.floor(src.bitmap.height / rowCount);
         cell = await cutFrame(src, c * cw, gridRow * ch, cw, ch);
       }
       cells.push(cell);
@@ -106,7 +106,9 @@ async function main() {
     await sliceFrames('角色四方向图集.jpeg', 'player-down', 0);
     await sliceFrames('角色背面图集.jpeg', 'player-up');       // 横向条带
     await sliceFrames('角色右向图集.jpeg', 'player-right');    // 横向条带
-    await sliceFrames('角色游泳图集.jpeg', 'player-swim');     // 游泳：横向条带
+    await sliceFrames('角色游泳图集.jpeg', 'player-swim');     // 游泳（朝右）：横向条带
+    await sliceFrames('角色游泳上下图集.jpeg', 'player-swim-up', 0, 2);   // 游泳（朝上）：2 行图集第一行
+    await sliceFrames('角色游泳上下图集.jpeg', 'player-swim-down', 1, 2); // 游泳（朝下）：2 行图集第二行
     // 朝左 = 朝右镜像
     for (let c = 0; c < 4; c++) {
       const cell = await Jimp.read(path.join(OUT, `player-right-${c}.png`));

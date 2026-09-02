@@ -38,21 +38,25 @@ const Player = {
     this.tryMove(dx, 0);
     this.tryMove(0, dy);
 
-    // 入水瞬间：一个大圈；游泳中：沿前进路径左右交替荡开尾流（V 字水痕）
+    // 入水瞬间：一个大圈；游泳中：身后拖出明显的 V 字尾流
     if (this.inWater && !wasInWater) {
       Effects.spawnRipple(this.x, this.y, 16, 1.1, false);
-      this.swimTimer = 0.2;
+      this.swimTimer = 0.15;
+      this.swimSide = false;
     } else if (this.inWater) {
       this.swimTimer -= dt;
       if (this.swimTimer <= 0) {
-        this.swimTimer = 0.2;
+        this.swimTimer = 0.16;
+        // 身后位置（前进的反方向）
+        const backX = this.facing === 'left' ? 12 : this.facing === 'right' ? -12 : 0;
+        const backY = this.facing === 'up' ? 12 : this.facing === 'down' ? -12 : 0;
+        // 左右交替的侧向偏移（垂直于前进方向），形成 V 字水痕
         this.swimSide = !this.swimSide;
-        const off = this.swimSide ? 7 : -7;
-        // 垂直于前进方向的偏移：左右走时上下荡开，上下走时左右荡开
-        let ox = 0, oy = 0;
-        if (this.facing === 'left' || this.facing === 'right') oy = off;
-        else ox = off;
-        Effects.spawnRipple(this.x + ox, this.y + oy, 9, 0.85, false);
+        const side = this.swimSide ? 8 : -8;
+        const perpX = (this.facing === 'up' || this.facing === 'down') ? side : 0;
+        const perpY = (this.facing === 'left' || this.facing === 'right') ? side : 0;
+        Effects.spawnRipple(this.x + backX, this.y + backY, 13, 1.0, false);
+        Effects.spawnRipple(this.x + backX + perpX, this.y + backY + perpY, 10, 0.9, false);
       }
     }
   },

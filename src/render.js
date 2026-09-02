@@ -33,6 +33,8 @@ const Render = {
     'player-left-0', 'player-left-1', 'player-left-2', 'player-left-3',
     'player-right-0', 'player-right-1', 'player-right-2', 'player-right-3',
     'player-swim-0', 'player-swim-1', 'player-swim-2', 'player-swim-3',
+    'player-swim-up-0', 'player-swim-up-1', 'player-swim-up-2', 'player-swim-up-3',
+    'player-swim-down-0', 'player-swim-down-1', 'player-swim-down-2', 'player-swim-down-3',
     'house-2', 'pagoda-2', 'fountain', 'tree-2',
     'tile-grass-1', 'tile-grass-2', 'tile-grass-3', 'tile-flower',
     'tile-road', 'tile-plaza', 'tile-sand', 'tile-water', 'tile-forest',
@@ -301,10 +303,17 @@ const Render = {
     const { ctx } = this;
     const swimming = Player.inWater;
     let name;
+    let flip = false;
     if (swimming) {
-      // 游泳贴图：水线已画进角色里，移动时循环划水帧，静止用漂浮帧
+      // 游泳贴图：水线已画进角色里，四方向齐全；移动循环划水帧，静止用漂浮帧
       const frame = Player.moving ? 1 + (Math.floor(time / 140) % 3) : 0;
-      name = `player-swim-${frame}`;
+      const dir = Player.facing;
+      if (dir === 'up') name = `player-swim-up-${frame}`;
+      else if (dir === 'down') name = `player-swim-down-${frame}`;
+      else {
+        name = `player-swim-${frame}`;   // 侧向条带默认朝右
+        flip = dir === 'left';
+      }
     } else if (!Player.moving) {
       name = `player-${Player.facing}-0`;
     } else {
@@ -316,17 +325,16 @@ const Render = {
     // 陆上有影子；水里没有影子（贴图自带浸水感）
     if (!swimming) this.shadow(Player.x - this.camX, Player.y - this.camY + 12, 9);
 
-    const h = swimming ? 42 : 40;
+    // 游泳和陆地统一尺寸；浮沉起伏只在静止漂浮时有（移动时不晃）
+    const h = 40;
     const w = img && img.naturalWidth ? h * img.naturalWidth / img.naturalHeight : 24;
-    const bob = swimming
-      ? Math.sin(time / 320) * 1.6
-      : (Player.moving ? Math.sin(time / 90) * 2 : 0);
-    const sink = swimming ? 5 : 0;
+    const bob = !Player.moving ? Math.sin(time / 320) * 1.6
+              : (swimming ? 0 : Math.sin(time / 90) * 2);
+    const sink = swimming ? 3 : 0;
 
     ctx.save();
     ctx.translate(Player.x - this.camX, Player.y - this.camY + 20 - h / 2 + sink + bob);
-    // 游泳贴图默认朝右：朝左走时镜像
-    if (swimming && Player.facing === 'left') ctx.scale(-1, 1);
+    if (flip) ctx.scale(-1, 1);
     if (img && img.complete && img.naturalWidth) {
       ctx.drawImage(img, -w / 2, -h / 2, w, h);
     } else {
