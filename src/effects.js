@@ -172,9 +172,11 @@ const Effects = {
     this.skyTiled = c;
   },
 
-  spawnRipple(wx, wy, max, life, land, alpha = 0.55) {    // 池上限防爆
+  // opts: noDrop=不画水珠弹起（纯涟漪圈），noRing=不画涟漪圈（纯水珠）
+  spawnRipple(wx, wy, max, life, land, alpha = 0.55, opts = {}) {    // 池上限防爆
     if (this.ripples.length > 320) this.ripples.shift();
-    this.ripples.push({ x: wx, y: wy, t: 0, life, max, land: !!land, a: alpha });
+    this.ripples.push({ x: wx, y: wy, t: 0, life, max, land: !!land, a: alpha,
+                        noDrop: !!opts.noDrop, noRing: !!opts.noRing });
   },
 
   // 雨滴溅起的水珠：直接画在主画布上（不经过水面裁剪层），陆地上也可见
@@ -183,6 +185,7 @@ const Effects = {
     const { ctx } = Render;
     ctx.save();
     for (const r of this.ripples) {
+      if (r.noDrop) continue; // 纯尾流圈不产生水花
       const p = r.t / r.life;
       if (p >= 0.35) continue; // 后段交给涟漪圈
       const q = p / 0.35;

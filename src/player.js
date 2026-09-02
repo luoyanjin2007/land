@@ -65,8 +65,9 @@ const Player = {
         const side = this.swimSide ? 9 : -9;
         const perpX = (this.facing === 'up' || this.facing === 'down') ? side : 0;
         const perpY = (this.facing === 'left' || this.facing === 'right') ? side : 0;
-        Effects.spawnRipple(this.x + backX, this.y + backY, 26, 0.6, false, 0.85);
-        Effects.spawnRipple(this.x + backX + perpX, this.y + backY + perpY, 18, 0.5, false, 0.7);
+        Effects.spawnRipple(this.x, this.y, 8, 0.4, false, 0.8, { noRing: true });   // 身上溅水花
+        Effects.spawnRipple(this.x + backX, this.y + backY, 26, 0.6, false, 0.85, { noDrop: true });        // 身后尾流圈
+        Effects.spawnRipple(this.x + backX + perpX, this.y + backY + perpY, 18, 0.5, false, 0.7, { noDrop: true });
       }
     }
   },
