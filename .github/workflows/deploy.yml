@@ -2,7 +2,7 @@ name: 部署到 Cloudflare Pages
 
 on:
   push:
-    branches: [master]
+    branches: [master, preview]
 
 jobs:
   deploy:
@@ -24,4 +24,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=land --branch=master
+          # 分支名直接透传给 Cloudflare：推 master → 正式版，推 preview → 独立预览
+          # 地址（preview.land-8aq.pages.dev），互不影响。用于上线前试跑那些
+          # 只能靠眼睛验的改动（帧率、夜色、贴图观感）。
+          command: pages deploy dist --project-name=land --branch=${{ github.ref_name }}
