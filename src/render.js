@@ -433,6 +433,9 @@ const Render = {
         ctx.restore();
       }
     }
+    this._tuftCountThisFrame = tuftCount;
+    this._grassCount = grassCount;
+    this._firstHash = firstHash;
   },
 
   drawPlayer(time) {
