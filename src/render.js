@@ -38,8 +38,8 @@ const Render = {
     'player-swim-up-0', 'player-swim-up-1', 'player-swim-up-2', 'player-swim-up-3',
     'player-swim-down-0', 'player-swim-down-1', 'player-swim-down-2', 'player-swim-down-3',
     'house-2', 'pagoda-2', 'fountain', 'tree-2',
-    'tile-grass-1', 'tile-grass-2', 'tile-grass-3', 'tile-flower-overlay',
-    'tile-road', 'tile-plaza', 'tile-sand', 'tile-water', 'tile-forest',
+    'tile-grass-2', 'tile-flower-overlay',
+    'tile-road', 'tile-dirt', 'tile-gravel', 'tile-plaza', 'tile-sand', 'tile-water', 'tile-forest',
     'tile-wall-top', 'grass-0', 'grass-1', 'grass-2', 'grass-3',
   ],
 
