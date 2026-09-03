@@ -62,6 +62,12 @@ const Render = {
     this.ctx = canvas.getContext('2d');
     this.resize();
     addEventListener('resize', () => this.resize());
+    addEventListener('keydown', (e) => {
+      if (e.key.toLowerCase() === 'p') {
+        this.perf.on = !this.perf.on;
+        this.perf.last = 0;   // 否则关掉再打开时，中间那段空档会被当成一帧的间隔
+      }
+    });
     this.loadSprites();
     this.buildBridgeTile();
     this.bakeMinimap();
@@ -210,8 +216,19 @@ const Render = {
 
   // ---------- 每帧绘制 ----------
 
+  // 性能面板（P 键开关）：各图层耗时用指数滑动平均，否则数字跳得看不清。
+  // 存在的意义是别再靠"调用次数推算"猜瓶颈——线上读数字才算证据。
+  perf: { on: false, frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0, nTree: 0, nTuft: 0, last: 0, gap: 0 },
+
+  // a 是上一帧均值，b 是本帧实测；0.1 的权重约等于看最近 10 帧
+  ema(a, b) { return a * 0.9 + b * 0.1; },
+
   draw(time) {
     const { ctx, canvas } = this;
+    const P = this.perf;
+    const t0 = P.on ? performance.now() : 0;
+    if (P.on && P.last) P.gap = this.ema(P.gap, t0 - P.last);
+    P.last = t0;
 
     // 贴图没加载完时只显示加载提示（避免残缺画面烤进缓存）
     if (!this.spritesReady()) {
@@ -235,6 +252,7 @@ const Render = {
     const cy1 = Math.floor((this.camY + canvas.height) / S);
 
     // 一遍贴上所有静态 chunk（地形 + 树 + 建筑）
+    const tChunk = P.on ? performance.now() : 0;
     for (let cy = cy0; cy <= cy1; cy++) {
       for (let cx = cx0; cx <= cx1; cx++) {
         if (cx * CONFIG.CHUNK_TILES >= CONFIG.WORLD_W || cy * CONFIG.CHUNK_TILES >= CONFIG.WORLD_H) continue;
@@ -243,6 +261,7 @@ const Render = {
     }
 
     // 动态层：水面特效（云影 + 水面涟漪）、雨珠溅落、摇曳的树
+    const tWater = P.on ? performance.now() : 0;
     Effects.drawWaterFX(cx0, cy0, cx1, cy1, time);
     Effects.drawSplashes();
 
@@ -277,8 +296,11 @@ const Render = {
 
     // 草丛在树之前：矮草被树冠和人物盖住才对。必须画在夜幕压暗之前——
     // 原先放在夜幕之后（图省事让它夜里醒目），结果它是全场唯一不受夜色影响的图层。
+    const tTuft = P.on ? performance.now() : 0;
     this.drawTufts(time);
+    const tTrees = P.on ? performance.now() : 0;
     this.drawTrees(time);
+    const tRest = P.on ? performance.now() : 0;
 
     // 人物
     this.drawPlayer(time);
@@ -314,8 +336,48 @@ const Render = {
     this.drawMinimap();
     this.drawHUD(time);
 
+    if (P.on) {
+      const end = performance.now();
+      P.chunk = this.ema(P.chunk, tWater - tChunk);
+      P.water = this.ema(P.water, tTuft - tWater);
+      P.tuft = this.ema(P.tuft, tTrees - tTuft);
+      P.trees = this.ema(P.trees, tRest - tTrees);
+      P.other = this.ema(P.other, (end - t0) - (tRest - tChunk));
+      P.frame = this.ema(P.frame, end - t0);
+      this.drawPerf();
+    }
+
     // 世界地图覆盖层（M 键开关，最顶层）
     WorldMap.drawOverlay(time);
+  },
+
+  // 性能读数：右上角。gap 是相邻两帧 draw 起点的间隔，也就是真实帧时间
+  // （含浏览器合成和我们之外的开销）；frame 只是 draw() 自己的耗时。
+  drawPerf() {
+    const { ctx, canvas } = this;
+    const P = this.perf;
+    const f = (v) => v.toFixed(2) + 'ms';
+    const lines = [
+      `帧间隔 ${f(P.gap)}  ≈ ${(1000 / Math.max(0.01, P.gap)).toFixed(0)} fps`,
+      `draw 合计 ${f(P.frame)}`,
+      `─────────────`,
+      `chunk 贴图 ${f(P.chunk)}`,
+      `水面特效   ${f(P.water)}`,
+      `草丛 ${f(P.tuft)}  ×${P.nTuft}`,
+      `树   ${f(P.trees)}  ×${P.nTree}`,
+      `其余 ${f(P.other)}`,
+    ];
+    ctx.font = '12px Consolas, monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    const w = 190, h = lines.length * 16 + 12;
+    const x = canvas.width - w - 12, y = 12;
+    ctx.fillStyle = 'rgba(0,0,0,.62)';
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = '#8fe38f';
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], x + 10, y + 20 + i * 16);
+    }
   },
 
   // 坐标哈希：同一个格子永远得到同一个随机数
@@ -461,6 +523,7 @@ const Render = {
     // 树冠：贴图预缩放到目标尺寸后 1:1 绘制（见 treeCrown），
     // setTransform 直接写死斜切，省掉每棵树的 save/restore
     const crowns = this._crowns || (this._crowns = []);
+    this.perf.nTree = n >> 2;
     for (let i = 0; i < n; i += 4) {
       const h = buf[i + 2];
       const s = crowns[h] || this.treeCrown(h);
@@ -502,6 +565,7 @@ const Render = {
     }
     if (!ready) return;
     const tufts = this._tufts || (this._tufts = []);
+    let nt = 0;
 
     for (let wy = y0; wy < y1; wy++) {
       for (let wx = x0; wx < x1; wx++) {
@@ -524,9 +588,11 @@ const Render = {
         const s = tufts[vi * 32 + gh] || this.tuftSprite(vi, gh);
         ctx.setTransform(1, 0, bend / gh, 1, bx, by);
         ctx.drawImage(s, -s.width / 2, -gh);
+        nt++;
       }
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.perf.nTuft = nt;
   },
 
   // 草丛预缩放，同 treeCrown 的道理：源图 26~42×40，实际只画到 ~20×20，
