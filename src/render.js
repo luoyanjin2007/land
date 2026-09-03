@@ -252,7 +252,7 @@ const Render = {
 
   // 性能面板（P 键开关）：各图层耗时用指数滑动平均，否则数字跳得看不清。
   // 存在的意义是别再靠"调用次数推算"猜瓶颈——线上读数字才算证据。
-  BUILD: 27,
+  BUILD: 29,
   perf: {
     on: false, bare: false, off: {},
     frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0,
