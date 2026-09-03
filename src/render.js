@@ -80,6 +80,11 @@ const Render = {
         this.perf.bare = !this.perf.bare;
         this.perf.last = 0;
       }
+      // 1~5 分层开关：关掉某层看帧间隔怎么动，比猜哪层贵可靠
+      if (e.key >= '1' && e.key <= '5') {
+        this.perf.off[e.key] = !this.perf.off[e.key];
+        this.perf.last = 0;
+      }
     });
     this.loadSprites();
     this.buildBridgeTile();
@@ -238,8 +243,12 @@ const Render = {
 
   // 性能面板（P 键开关）：各图层耗时用指数滑动平均，否则数字跳得看不清。
   // 存在的意义是别再靠"调用次数推算"猜瓶颈——线上读数字才算证据。
-  BUILD: 24,
-  perf: { on: false, bare: false, frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0, nChunk: 0, nTuft: 0, last: 0, gap: 0 },
+  BUILD: 25,
+  perf: {
+    on: false, bare: false, off: {},
+    frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0,
+    nChunk: 0, nTuft: 0, last: 0, gap: 0,
+  },
 
   // a 是上一帧均值，b 是本帧实测；0.1 的权重约等于看最近 10 帧
   ema(a, b) { return a * 0.9 + b * 0.1; },
@@ -293,7 +302,7 @@ const Render = {
     // 冠顶会探进屏幕约 11px。左右不用多贴——
     // 树冠只溢出格子 0.5px，落不到屏内。
     let nc = 0;
-    for (let cy = cy0; cy <= cy1 + 1; cy++) {
+    if (!P.off[1]) for (let cy = cy0; cy <= cy1 + 1; cy++) {
       for (let cx = cx0; cx <= cx1; cx++) {
         if (cx * CONFIG.CHUNK_TILES >= CONFIG.WORLD_W || cy * CONFIG.CHUNK_TILES >= CONFIG.WORLD_H) continue;
         ctx.drawImage(this.getChunk(cx, cy), cx * S - this.camX - PXX, cy * S - this.camY - PT);
@@ -302,10 +311,12 @@ const Render = {
     }
     P.nChunk = nc;
 
-    // 动态层：水面特效（云影 + 水面涟漪）、雨珠溅落、摇曳的树
+    // 动态层：水面特效（云影 + 水面涟漪）、雨珠溅落
     const tWater = P.on ? performance.now() : 0;
-    Effects.drawWaterFX(cx0, cy0, cx1, cy1, time);
-    Effects.drawSplashes();
+    if (!P.off[2]) {
+      Effects.drawWaterFX(cx0, cy0, cx1, cy1, time);
+      Effects.drawSplashes();
+    }
 
     const night = Ambience.nightLevel(time);
     const T = CONFIG.TILE;
@@ -319,7 +330,7 @@ const Render = {
     // 那一层一起压黑（原先放在夜幕里，等于盖在人物身上）。
     // 按行合并连续水格再一次性 fill：分次 fill 会在格子交界留下半透明叠加的
     // 淡色网格线，合成同一条路径则由扫描线统一算覆盖率，接缝消失。
-    if (night > 0.02) {
+    if (night > 0.02 && !P.off[5]) {
       ctx.fillStyle = `rgba(3,8,24,${night * 0.42})`;
       ctx.beginPath();
       for (let wy = ty0; wy <= ty1; wy++) {
@@ -339,7 +350,7 @@ const Render = {
     // 草丛在树之前：矮草被树冠和人物盖住才对。必须画在夜幕压暗之前——
     // 原先放在夜幕之后（图省事让它夜里醒目），结果它是全场唯一不受夜色影响的图层。
     const tTuft = P.on ? performance.now() : 0;
-    this.drawTufts(time);
+    if (!P.off[3]) this.drawTufts(time);
     const tTrees = P.on ? performance.now() : 0;
     // 树冠已全部烤进 chunk，这里只剩惊鸟判定
     this.scareBirds(time);
@@ -349,11 +360,11 @@ const Render = {
     this.drawPlayer(time);
 
     // 雨丝
-    Effects.drawRain();
+    if (!P.off[4]) Effects.drawRain();
 
     // 昼夜循环：落叶/鸟/萤火虫（Ambience）→ 夜幕压暗 → 窗户亮灯
-    Ambience.draw(time);
-    if (night > 0.02) {
+    if (!P.off[4]) Ambience.draw(time);
+    if (night > 0.02 && !P.off[5]) {
       ctx.fillStyle = `rgba(10,15,40,${night * 0.5})`;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -400,16 +411,18 @@ const Render = {
     const { ctx, canvas } = this;
     const P = this.perf;
     const f = (v) => v.toFixed(2) + 'ms';
+    const sw = (n) => P.off[n] ? '关' : '开';
     const lines = [
       `v${this.BUILD}  画布 ${canvas.width}×${canvas.height}${P.bare ? '  [空跑]' : ''}`,
       `帧间隔 ${f(P.gap)}  ≈ ${(1000 / Math.max(0.01, P.gap)).toFixed(0)} fps`,
       `draw 合计 ${f(P.frame)}`,
       `─────────────`,
-      `chunk 贴图 ${f(P.chunk)}  ×${P.nChunk}`,
-      `水面特效   ${f(P.water)}`,
-      `草丛 ${f(P.tuft)}  ×${P.nTuft}`,
-      `惊鸟 ${f(P.trees)}`,
-      `其余 ${f(P.other)}`,
+      `1 chunk ${sw(1)} ${f(P.chunk)} ×${P.nChunk}`,
+      `2 水面   ${sw(2)} ${f(P.water)}`,
+      `3 草丛   ${sw(3)} ${f(P.tuft)} ×${P.nTuft}`,
+      `4 氛围雨 ${sw(4)}`,
+      `5 夜色   ${sw(5)}`,
+      `惊鸟 ${f(P.trees)}   其余 ${f(P.other)}`,
     ];
     ctx.font = '12px Consolas, monospace';
     ctx.textAlign = 'left';
