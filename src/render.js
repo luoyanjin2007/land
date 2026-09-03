@@ -76,6 +76,10 @@ const Render = {
         this.perf.on = !this.perf.on;
         this.perf.last = 0;   // 否则关掉再打开时，中间那段空档会被当成一帧的间隔
       }
+      if (e.key.toLowerCase() === 'b') {
+        this.perf.bare = !this.perf.bare;
+        this.perf.last = 0;
+      }
     });
     this.loadSprites();
     this.buildBridgeTile();
@@ -234,7 +238,8 @@ const Render = {
 
   // 性能面板（P 键开关）：各图层耗时用指数滑动平均，否则数字跳得看不清。
   // 存在的意义是别再靠"调用次数推算"猜瓶颈——线上读数字才算证据。
-  perf: { on: false, frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0, nChunk: 0, nTuft: 0, last: 0, gap: 0 },
+  BUILD: 24,
+  perf: { on: false, bare: false, frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0, nChunk: 0, nTuft: 0, last: 0, gap: 0 },
 
   // a 是上一帧均值，b 是本帧实测；0.1 的权重约等于看最近 10 帧
   ema(a, b) { return a * 0.9 + b * 0.1; },
@@ -259,6 +264,18 @@ const Render = {
 
     ctx.fillStyle = '#0a1a2e';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // 空跑模式（B 键）：除了背景填充什么都不画。用来量帧率的「地板」——
+    // 如果空屏的帧间隔和满屏一样，瓶颈就不在我们画的内容上，继续优化渲染是白费。
+    if (P.bare) {
+      if (P.on) {
+        P.frame = this.ema(P.frame, performance.now() - t0);
+        P.chunk = P.water = P.tuft = P.trees = P.other = 0;
+        P.nChunk = P.nTuft = 0;
+        this.drawPerf();
+      }
+      return;
+    }
 
     // 可见范围覆盖到的 chunk
     const S = CONFIG.CHUNK_PX;
@@ -384,6 +401,7 @@ const Render = {
     const P = this.perf;
     const f = (v) => v.toFixed(2) + 'ms';
     const lines = [
+      `v${this.BUILD}  画布 ${canvas.width}×${canvas.height}${P.bare ? '  [空跑]' : ''}`,
       `帧间隔 ${f(P.gap)}  ≈ ${(1000 / Math.max(0.01, P.gap)).toFixed(0)} fps`,
       `draw 合计 ${f(P.frame)}`,
       `─────────────`,
@@ -396,7 +414,7 @@ const Render = {
     ctx.font = '12px Consolas, monospace';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
-    const w = 190, h = lines.length * 16 + 12;
+    const w = 215, h = lines.length * 16 + 12;
     const x = canvas.width - w - 12, y = 12;
     ctx.fillStyle = 'rgba(0,0,0,.62)';
     ctx.fillRect(x, y, w, h);
