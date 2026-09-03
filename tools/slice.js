@@ -194,7 +194,24 @@ async function main() {
     }
   }
 
+
+  // ---------- 草丛图集：4 丛横向排列，白底 ----------
+  const gSrc = await Jimp.read(path.join(ROOT, 'assets', '草丛图集.jpeg'));
+  for (let c = 0; c < 4; c++) {
+    const cell = gSrc.clone().crop({ x: c * 512, y: 0, w: 512, h: 2048 });
+    whitenessToAlpha(cell);
+    const box = significantBBox(cell);
+    if (!box) continue;
+    const cut = cell.crop({
+      x: Math.max(0, box.minX - 2), y: Math.max(0, box.minY - 2),
+      w: box.maxX - box.minX + 5, h: box.maxY - box.minY + 5,
+    });
+    cut.resize({ h: 40, w: Jimp.AUTO });
+    await cut.write(path.join(OUT, `grass-${c}.png`));
+  }
+
   console.log('完成，输出文件：');
+
   for (const f of fs.readdirSync(OUT).sort()) {
     const s = fs.statSync(path.join(OUT, f));
     console.log(`  ${f}  (${Math.round(s.size / 1024)}KB)`);
