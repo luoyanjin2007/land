@@ -13,13 +13,12 @@ const Render = {
   sprites: {},                 // 贴图缓存 name -> Image
   chunkCache: new Map(),       // 地形 chunk 缓存 "cx,cy" -> canvas
   maskCache: new Map(),        // 水格形状缓存 "cx,cy" -> canvas
-  treeEdge: null,              // 每格 1 字节：1 = 林缘树（动态摆动），0 = 林内树（烤进 chunk）
 
-  // chunk 四周留白：烤进 chunk 的东西会探出所属格子——树冠最高 41px 且锚点再上移
-  // 2px，探出格顶 11px；宝塔 42×46 也探出格顶 14px、左右各 5px。不留白就会被 chunk
-  // 边界切平，每 16 格一条缝。上方给足 48px，左右 8px（树冠 33px 宽居中于 32px 格，
-  // 各溢出 0.5px；宝塔溢出 5px）。下方不需要：树影在格内，冠底也不过格底。
-  CHUNK_PAD_T: 48,
+  // chunk 四周留白：烤进 chunk 的东西会探出所属格子——树冠最高 41px 且锚点上移
+  // 2px，探出格顶 11px；宝塔 42×46 探出格顶 16px、左右各 5px。不留白就会被 chunk
+  // 边界切平，每 16 格一条缝。上方 20px 覆盖最高的宝塔，左右 8px。
+  // 下方不需要：树影在格内，冠底也不过格底。
+  CHUNK_PAD_T: 20,
   CHUNK_PAD_X: 8,
 
   COLORS: {
@@ -78,35 +77,8 @@ const Render = {
     });
     this.loadSprites();
     this.buildBridgeTile();
-    this.bakeTreeEdge();
     this.bakeMinimap();
     this.snapCamera();
-  },
-
-  // 标记哪些树是「林缘」：8 邻域里只要有一格不是森林就算。
-  // 只有林缘树需要每帧动态绘制——GPU 瓶颈来自绘制调用数（实测树林 43fps 时
-  // JS 仅 3.3ms，剩下 20ms 全在 GPU 啃 757 次带斜切的 drawImage），
-  // 林内树看不到轮廓、被邻树遮挡，静止也不易察觉，烤进 chunk 后调用数降七成。
-  // 一次性算好存表，避免每帧对每棵树做 8 次邻域查询。
-  bakeTreeEdge() {
-    const W = CONFIG.WORLD_W, H = CONFIG.WORLD_H;
-    const e = new Uint8Array(W * H);
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        if (World.tileAt(x, y) !== TILE_TYPE.FOREST) continue;
-        let edge = false;
-        for (let dy = -1; dy <= 1 && !edge; dy++) {
-          for (let dx = -1; dx <= 1; dx++) {
-            if (!dx && !dy) continue;
-            const nx = x + dx, ny = y + dy;
-            // 越界当作非森林：世界边缘的树也归林缘，数量极少无所谓
-            if (!World.inBounds(nx, ny) || World.tileAt(nx, ny) !== TILE_TYPE.FOREST) { edge = true; break; }
-          }
-        }
-        if (edge) e[y * W + x] = 1;
-      }
-    }
-    this.treeEdge = e;
   },
 
   // 程序化木桥贴图：棕色木板 + 板缝 + 木纹高光
@@ -254,7 +226,7 @@ const Render = {
 
   // 性能面板（P 键开关）：各图层耗时用指数滑动平均，否则数字跳得看不清。
   // 存在的意义是别再靠"调用次数推算"猜瓶颈——线上读数字才算证据。
-  perf: { on: false, frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0, nTree: 0, nTuft: 0, last: 0, gap: 0 },
+  perf: { on: false, frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0, nChunk: 0, nTuft: 0, last: 0, gap: 0 },
 
   // a 是上一帧均值，b 是本帧实测；0.1 的权重约等于看最近 10 帧
   ema(a, b) { return a * 0.9 + b * 0.1; },
@@ -293,14 +265,17 @@ const Render = {
     const tChunk = P.on ? performance.now() : 0;
     const PT = this.CHUNK_PAD_T, PXX = this.CHUNK_PAD_X;
     // 多贴一行下方的 chunk：林内树冠已烤进各自 chunk，视口下边界外那一行树的
-    // 冠顶会探进屏幕约 11px（原先由 drawTrees 多扫 2 格覆盖到）。左右不用多贴——
+    // 冠顶会探进屏幕约 11px。左右不用多贴——
     // 树冠只溢出格子 0.5px，落不到屏内。
+    let nc = 0;
     for (let cy = cy0; cy <= cy1 + 1; cy++) {
       for (let cx = cx0; cx <= cx1; cx++) {
         if (cx * CONFIG.CHUNK_TILES >= CONFIG.WORLD_W || cy * CONFIG.CHUNK_TILES >= CONFIG.WORLD_H) continue;
         ctx.drawImage(this.getChunk(cx, cy), cx * S - this.camX - PXX, cy * S - this.camY - PT);
+        nc++;
       }
     }
+    P.nChunk = nc;
 
     // 动态层：水面特效（云影 + 水面涟漪）、雨珠溅落、摇曳的树
     const tWater = P.on ? performance.now() : 0;
@@ -341,7 +316,8 @@ const Render = {
     const tTuft = P.on ? performance.now() : 0;
     this.drawTufts(time);
     const tTrees = P.on ? performance.now() : 0;
-    this.drawTrees(time);
+    // 树冠已全部烤进 chunk，这里只剩惊鸟判定
+    this.scareBirds(time);
     const tRest = P.on ? performance.now() : 0;
 
     // 人物
@@ -403,10 +379,10 @@ const Render = {
       `帧间隔 ${f(P.gap)}  ≈ ${(1000 / Math.max(0.01, P.gap)).toFixed(0)} fps`,
       `draw 合计 ${f(P.frame)}`,
       `─────────────`,
-      `chunk 贴图 ${f(P.chunk)}`,
+      `chunk 贴图 ${f(P.chunk)}  ×${P.nChunk}`,
       `水面特效   ${f(P.water)}`,
       `草丛 ${f(P.tuft)}  ×${P.nTuft}`,
-      `树   ${f(P.trees)}  ×${P.nTree}`,
+      `惊鸟 ${f(P.trees)}`,
       `其余 ${f(P.other)}`,
     ];
     ctx.font = '12px Consolas, monospace';
@@ -503,16 +479,13 @@ const Render = {
     const cx = sx + CONFIG.TILE / 2;
     const by = sy + CONFIG.TILE;
 
-    // 树影是静态的——树冠摆动时影子并不动，所以烤进 chunk，省掉每帧重建上千段
-    // 椭圆路径。位置比原动态版上移 2px，让椭圆完整落在本格内；否则会被 chunk
-    // 下边界裁掉，每 16 格留一条接缝。
-    // 林内树的树冠也一起烤进来（见 bakeTreeEdge）；林缘树的冠由 drawTrees 动态画。
+    // 树和树影全部烤进 chunk：不再有任何逐树的每帧绘制。
+    // 实测树林 43fps 时 JS 只占 3.3ms，20ms 全在 GPU 啃七百多次带斜切的
+    // drawImage——瓶颈是绘制调用数，摆动效果换不来这个代价，所以整个砍掉。
     if (t === TILE_TYPE.FOREST) {
       const size = (30 + this.hash(wx, wy) * 12) | 0;
       this.shadowOn(g, cx, by - 5, size * 0.3);
-      if (!this.treeEdge[wy * CONFIG.WORLD_W + wx]) {
-        this.blitOn(g, 'tree-2', cx, by - 2, Math.round(size * 0.8), size);
-      }
+      this.blitOn(g, 'tree-2', cx, by - 2, Math.round(size * 0.8), size);
     }
     else if (t === TILE_TYPE.HOUSE) {
       const isPagoda = this.hash(wx, wy) > 0.86;
@@ -524,82 +497,44 @@ const Render = {
     else if (t === TILE_TYPE.FOUNTAIN) {
       this.blitOn(g, 'fountain', cx, by - 2, 40, 40);
     }
+    // 紧贴森林北侧的草丛也烤进来：树冠会探进北边草格 11px，而 chunk 整体贴在
+    // 动态草丛层之前，那里的草丛会压在树冠上面（南边的树本该遮住北边的草）。
+    // 烤进 chunk 则由逐行绘制顺序保证树后画、遮挡正确；代价只是这一圈草不摆。
+    else if (t === TILE_TYPE.GRASS && World.tileAt(wx, wy + 1) === TILE_TYPE.FOREST) {
+      this.tuftInto(g, wx, wy, sx, sy);
+    }
   },
 
-  // 摇曳的树（动态绘制）：风让树轻轻摆动，人物靠近时树会弯腰让路
-  drawTrees(time) {
-    const { ctx, canvas } = this;
+  // 静态草丛（烤进 chunk 用）。摆放参数与 drawTufts 里的动态版必须逐字一致，
+  // 否则同一格会长出位置或高度不同的两丛草。
+  tuftInto(g, wx, wy, sx, sy) {
+    const gv = this._grassVariants || (this._grassVariants = []);
+    if (!gv.length) for (let i = 0; i < 4; i++) gv.push(this.sprites['grass-' + i]);
+    for (let i = 0; i < 4; i++) {
+      if (!gv[i] || !gv[i].complete || !gv[i].naturalWidth) return;
+    }
+    const hv = this.hash(wx * 7 + 13, wy * 7 + 31);
+    if (hv < 0.55) return;
+    const t01 = (hv - 0.55) / 0.45;
+    const vi = Math.floor(this.hash(wx * 3 + 5, wy * 3 + 9) * 4);
+    const gh = (15 + t01 * 9) | 0;
+    const tufts = this._tufts || (this._tufts = []);
+    const s = tufts[vi * 32 + gh] || this.tuftSprite(vi, gh);
+    g.drawImage(s, sx + 6 + t01 * 20 - s.width / 2, sy + 28 - gh);
+  },
+
+  // 惊鸟：人物贴近树时惊飞一群鸟。树已全部烤进 chunk，不用再扫视口，
+  // 只扫人物周围 ±2 格就够了。
+  scareBirds(time) {
     const T = CONFIG.TILE;
-    const img = this.sprites['tree-2'];
-    if (!img || !img.complete || !img.naturalWidth) return;   // 整批共用一张，循环外判一次
-    const x0 = Math.max(0, Math.floor(this.camX / T) - 1);
-    const y0 = Math.max(0, Math.floor(this.camY / T) - 1);
-    const x1 = Math.min(CONFIG.WORLD_W, Math.ceil((this.camX + canvas.width) / T) + 1);
-    const y1 = Math.min(CONFIG.WORLD_H, Math.ceil((this.camY + canvas.height) / T) + 2);
-    const pxp = Player.x, pyp = Player.y;
-
-    // 先扫描收集，再统一绘制。buf 跨帧复用，避免每帧产生垃圾。
-    // 只绘制林缘树：林内树的冠已烤进 chunk（见 drawPropsInto），再动态画一遍会
-    // 露出底下那棵静止的重影。跳过它们每帧省掉 ~550 次 setTransform + drawImage，
-    // 提交给 GPU 的绘制调用降到约 1/4——实测瓶颈正在这里（树林 43fps 时 JS 只占 3.3ms）。
-    // 代价：林子深处的树不再随风摆、也不给人物弯腰让路；惊鸟仍对所有树生效。
-    const buf = this._treeBuf || (this._treeBuf = []);
-    let n = 0;
-    const R = 88, R2 = R * R;
-    const edge = this.treeEdge;
-    const W = CONFIG.WORLD_W;
-    for (let wy = y0; wy < y1; wy++) {
-      for (let wx = x0; wx < x1; wx++) {
-        if (World.tileAt(wx, wy) !== TILE_TYPE.FOREST) continue;
-        const pdx = wx * T + T / 2 - pxp;
-        const pdy = wy * T + T - pyp;
-        const d2 = pdx * pdx + pdy * pdy;
-        // 惊鸟对林内树也生效，所以判定放在跳过之前
-        if (d2 < 34 * 34) Ambience.tryScare(wx, wy, pdx, time);
-        if (!edge[wy * W + wx]) continue;
-
-        const size = (30 + this.hash(wx, wy) * 12) | 0;   // 取整 = 预缩放的桶号，误差 <1px
-        const cxp = wx * T + T / 2 - this.camX;
-        const byp = wy * T + T - this.camY;
-
-        // 风：缓慢的全局摆动（每棵树相位不同）
-        let bend = Math.sin(time / 750 + wx * 0.04 + wy * 0.02) * 1.6;
-        // 人物推移：越近弯得越厉害，方向 = 远离人物
-        if (d2 < R2) {
-          const d = Math.sqrt(d2);   // hypot 慢得多
-          bend += -(pdx / (d || 1)) * (1 - d / R) * 8;
-        }
-
-        buf[n++] = cxp; buf[n++] = byp; buf[n++] = size; buf[n++] = bend / size;
+    const ptx = Math.floor(Player.x / T), pty = Math.floor(Player.y / T);
+    for (let wy = pty - 2; wy <= pty + 2; wy++) {
+      for (let wx = ptx - 2; wx <= ptx + 2; wx++) {
+        if (!World.inBounds(wx, wy) || World.tileAt(wx, wy) !== TILE_TYPE.FOREST) continue;
+        const pdx = wx * T + T / 2 - Player.x, pdy = wy * T + T - Player.y;
+        if (pdx * pdx + pdy * pdy < 34 * 34) Ambience.tryScare(wx, wy, pdx, time);
       }
     }
-
-    // 树影不在这里画：它是静态的，已烤进 chunk（见 drawPropsInto）。
-    // 原先每帧要为上千棵树重建椭圆路径再一次性填充，纯 CPU 开销。
-
-    // 树冠：贴图预缩放到目标尺寸后 1:1 绘制（见 treeCrown），
-    // setTransform 直接写死斜切，省掉每棵树的 save/restore
-    const crowns = this._crowns || (this._crowns = []);
-    this.perf.nTree = n >> 2;
-    for (let i = 0; i < n; i += 4) {
-      const h = buf[i + 2];
-      const s = crowns[h] || this.treeCrown(h);
-      ctx.setTransform(1, 0, buf[i + 3], 1, buf[i], buf[i + 1] - 2);
-      ctx.drawImage(s, -s.width / 2, -h);
-    }
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-  },
-
-  // 树冠预缩放：源图 96×96，实际只画到 ~34×42。原先每帧对每棵树都做一次 3 倍
-  // 降采样，浏览器为此走的是慢的高质量缩放路径。按整数高度分桶（30~41，12 个）
-  // 预缩放一次，之后每帧都是 1:1 采样。
-  treeCrown(h) {
-    const c = document.createElement('canvas');
-    const w = Math.round(h * 0.8);
-    c.width = w; c.height = h;
-    c.getContext('2d').drawImage(this.sprites['tree-2'], 0, 0, w, h);
-    this._crowns[h] = c;
-    return c;
   },
 
   // 草丛（AI 贴图）：夜幕之后绘制 → 夜晚也清晰醒目；风摆 + 人物拨动
@@ -627,6 +562,8 @@ const Render = {
     for (let wy = y0; wy < y1; wy++) {
       for (let wx = x0; wx < x1; wx++) {
         if (World.tileAt(wx, wy) !== TILE_TYPE.GRASS) continue;
+        // 紧贴森林北侧的这一格已烤进 chunk（见 tuftInto），跳过以免重复
+        if (World.tileAt(wx, wy + 1) === TILE_TYPE.FOREST) continue;
         // 独立 hash：若沿用 hash(wx, wy) 会与地面贴图变体 floor(hash*5) 完全相关，
         // 导致草丛只长在变体格上（看着像草丛自带一块异色地面）
         const hv = this.hash(wx * 7 + 13, wy * 7 + 31);

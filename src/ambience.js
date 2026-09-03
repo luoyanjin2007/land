@@ -78,7 +78,7 @@ const Ambience = {
     if (night < 0.15 && this.flies.length) this.flies.length = Math.max(0, this.flies.length - 2);
   },
 
-  // 人物靠近树时惊飞一群鸟（drawTrees 里调用，带每树冷却）
+  // 人物靠近树时惊飞一群鸟（Render.scareBirds 里调用，带每树冷却）
   tryScare(wx, wy, pdx, time) {
     const key = wx + ',' + wy;
     const last = this.scareCd.get(key) || -99999;
