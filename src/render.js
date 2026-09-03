@@ -402,10 +402,15 @@ const Render = {
 
     // 草丛：稀疏点缀在草原上，随风摆动 + 人物拨动
     let tuftCount = 0, grassCount = 0, firstHash = -1;   // PROBE
+    const typeCounts = {};   // PROBE: 可见范围地形统计
     for (let wy = y0; wy < y1; wy++) {
       for (let wx = x0; wx < x1; wx++) {
-        if (World.tileAt(wx, wy) !== TILE_TYPE.GRASS) continue;
+        const tt = World.tileAt(wx, wy);
+        typeCounts[tt] = (typeCounts[tt] || 0) + 1;
+        if (tt !== TILE_TYPE.GRASS) continue;
+        grassCount++;
         const hv = this.hash(wx, wy);
+        if (this._debugHashes && this._debugHashes.length < 5) this._debugHashes.push(hv.toFixed(3));
         if (hv < 0.65) continue;
         tuftCount++;   // PROBE
         const probe = this.sprites['grass-2'];
@@ -436,6 +441,8 @@ const Render = {
     this._tuftCountThisFrame = tuftCount;
     this._grassCount = grassCount;
     this._firstHash = firstHash;
+    this._typeCounts = typeCounts;
+    this._debugHashes = this._debugHashes || [];   // 保留前 5 个哈希值
   },
 
   drawPlayer(time) {
@@ -601,8 +608,9 @@ const Render = {
     );
     // PROBE 诊断行
     ctx.fillStyle = 'rgba(255,255,255,.6)';
+    const tcS = this._typeCounts ? Object.entries(this._typeCounts).map(([k, v]) => k + ':' + v).join(' ') : '?';
     ctx.fillText(
-      `草格:${this._grassCount ?? '?'} 草丛:${this._tuftCountThisFrame ?? '?'} 首哈希:${(this._firstHash ?? -1).toFixed(3)} camY:${Math.round(this.camY)} camX:${Math.round(this.camX)}`,
+      `草格:${this._grassCount ?? '?'} 草丛:${this._tuftCountThisFrame ?? '?'} 首哈希:${(this._firstHash ?? -1).toFixed(3)} | 类型: ${tcS}`,
       180, 44
     );
   },
