@@ -76,6 +76,11 @@ const World = {
     this.generateRoads(seed);
     // 风景湖（道路穿湖 → 湖中段成为木桥）
     this.placeScenicLakes(rng);
+
+    // 地形缓存：生成全部完成后才启用。tileAt 此后是 (x,y) 的纯函数，
+    // 每格只算一次（存 t+1，0 = 未计算）。生成期间必须为 null——
+    // carveRoad 会边查 tileAt 边往 roadTiles 加，那时缓存会存下没铺路的旧值。
+    this._tc = new Uint8Array(this.W * this.H);
   },
 
   inBounds(x, y) { return x >= 0 && y >= 0 && x < this.W && y < this.H; },
@@ -279,14 +284,34 @@ const World = {
         if (get(x, y) === TILE_TYPE.GRASS && rng() < 0.12) set(x, y, TILE_TYPE.FOREST);
       }
     }
+    // 剩下的空地改判为草坪：外观与草地一致，但渲染层不会在上面长野草丛和野花，
+    // 城内因此干净。必须放在最后——上面民居/种树两轮都在筛 TILE_TYPE.GRASS。
+    for (let y = 0; y < c.h; y++) {
+      for (let x = 0; x < c.w; x++) {
+        if (g[y][x] === TILE_TYPE.GRASS) g[y][x] = TILE_TYPE.LAWN;
+      }
+    }
     this._layouts.set(c.name, g);
     return g;
   },
 
   // 核心：任意格子的地形类型（按需计算）
+  // 地形查询（带缓存）：每帧有多个全屏遍历在调它，未缓存时噪声计算会吃掉
+  // 近 30% 的帧预算。缓存在 generate() 末尾启用，之前直接透传。
   tileAt(x, y) {
+    const tc = this._tc;
+    if (!tc) return this.computeTile(x, y);
     if (!this.inBounds(x, y)) return TILE_TYPE.WATER;
-    const rkey = x + ',' + y;
+    const i = y * this.W + x;
+    const c = tc[i];
+    if (c) return c - 1;
+    const t = this.computeTile(x, y);
+    tc[i] = t + 1;
+    return t;
+  },
+
+  computeTile(x, y) {
+    if (!this.inBounds(x, y)) return TILE_TYPE.WATER;
 
     // 城市内部布局优先
     const cIn = this.cityAt(x, y);
@@ -296,7 +321,7 @@ const World = {
     }
 
     // 城际道路（穿过城郊缓冲和野外，连接各城城门）
-    if (this.roadTiles.has(rkey)) return TILE_TYPE.PATH;
+    if (this.roadTiles.has(x + ',' + y)) return TILE_TYPE.PATH;
 
     // 风景湖（湖面渲染成水；路上的湖格已被上面 road 分支接管 = 木桥）
     if (this.inLakeRaw(x, y)) return TILE_TYPE.WATER;

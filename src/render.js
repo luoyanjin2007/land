@@ -26,6 +26,7 @@ const Render = {
     [TILE_TYPE.PLAZA]: '#c9c2b0',
     [TILE_TYPE.FOUNTAIN]: '#9fc4d8',
     [TILE_TYPE.PATH]: '#c2a575',
+    [TILE_TYPE.LAWN]: '#5d9e4a',   // 与草地同色：城内草坪只是不长野草，观感应一致
   },
 
   SPRITE_LIST: [
@@ -37,7 +38,7 @@ const Render = {
     'player-swim-up-0', 'player-swim-up-1', 'player-swim-up-2', 'player-swim-up-3',
     'player-swim-down-0', 'player-swim-down-1', 'player-swim-down-2', 'player-swim-down-3',
     'house-2', 'pagoda-2', 'fountain', 'tree-2',
-    'tile-grass-1', 'tile-grass-2', 'tile-grass-3', 'tile-flower',
+    'tile-grass-1', 'tile-grass-2', 'tile-grass-3', 'tile-flower-overlay',
     'tile-road', 'tile-plaza', 'tile-sand', 'tile-water', 'tile-forest',
     'tile-wall-top', 'grass-0', 'grass-1', 'grass-2', 'grass-3',
   ],
@@ -45,7 +46,8 @@ const Render = {
   TILE_IMG: {
     [TILE_TYPE.WATER]: ['tile-water'],
     [TILE_TYPE.SAND]: ['tile-sand'],
-    [TILE_TYPE.GRASS]: ['tile-grass-2', 'tile-grass-2', 'tile-grass-2', 'tile-grass-1', 'tile-flower'],
+    [TILE_TYPE.GRASS]: ['tile-grass-2'],
+    [TILE_TYPE.LAWN]: ['tile-grass-2'],
     [TILE_TYPE.FOREST]: ['tile-forest'],
     [TILE_TYPE.ROAD]: ['tile-road'],
     [TILE_TYPE.PATH]: ['tile-dirt', 'tile-dirt', 'tile-gravel'],
@@ -243,6 +245,39 @@ const Render = {
     // 动态层：水面特效（云影 + 水面涟漪）、雨珠溅落、摇曳的树
     Effects.drawWaterFX(cx0, cy0, cx1, cy1, time);
     Effects.drawSplashes();
+
+    const night = Ambience.nightLevel(time);
+    const T = CONFIG.TILE;
+    const tx0 = Math.max(0, Math.floor(this.camX / T));
+    const ty0 = Math.max(0, Math.floor(this.camY / T));
+    const tx1 = Math.min(CONFIG.WORLD_W - 1, Math.ceil((this.camX + canvas.width) / T));
+    const ty1 = Math.min(CONFIG.WORLD_H - 1, Math.ceil((this.camY + canvas.height) / T));
+
+    // 水面额外压暗：现实里夜间水体几乎不漫反射，只镜面映天，所以比岸上暗得多。
+    // 画在人物之前——游泳的人是水面之上的物体，只该吃全局夜色，不该被水的
+    // 那一层一起压黑（原先放在夜幕里，等于盖在人物身上）。
+    // 按行合并连续水格再一次性 fill：分次 fill 会在格子交界留下半透明叠加的
+    // 淡色网格线，合成同一条路径则由扫描线统一算覆盖率，接缝消失。
+    if (night > 0.02) {
+      ctx.fillStyle = `rgba(3,8,24,${night * 0.42})`;
+      ctx.beginPath();
+      for (let wy = ty0; wy <= ty1; wy++) {
+        let run = -1;
+        for (let wx = tx0; wx <= tx1 + 1; wx++) {
+          const isWater = wx <= tx1 && World.tileAt(wx, wy) === TILE_TYPE.WATER;
+          if (isWater) { if (run < 0) run = wx; }
+          else if (run >= 0) {
+            ctx.rect(run * T - this.camX, wy * T - this.camY, (wx - run) * T, T);
+            run = -1;
+          }
+        }
+      }
+      ctx.fill();
+    }
+
+    // 草丛在树之前：矮草被树冠和人物盖住才对。必须画在夜幕压暗之前——
+    // 原先放在夜幕之后（图省事让它夜里醒目），结果它是全场唯一不受夜色影响的图层。
+    this.drawTufts(time);
     this.drawTrees(time);
 
     // 人物
@@ -252,24 +287,20 @@ const Render = {
     Effects.drawRain();
 
     // 昼夜循环：落叶/鸟/萤火虫（Ambience）→ 夜幕压暗 → 窗户亮灯
-    const night = Ambience.nightLevel(time);
     Ambience.draw(time);
     if (night > 0.02) {
       ctx.fillStyle = `rgba(10,15,40,${night * 0.5})`;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+
       // 窗户亮灯（夜晚才开灯，窗口位置固定在房屋上部）
       if (night > 0.15) {
-        const tx0 = Math.max(0, Math.floor(this.camX / CONFIG.TILE));
-        const ty0 = Math.max(0, Math.floor(this.camY / CONFIG.TILE));
-        const tx1 = Math.min(CONFIG.WORLD_W - 1, Math.ceil((this.camX + canvas.width) / CONFIG.TILE));
-        const ty1 = Math.min(CONFIG.WORLD_H - 1, Math.ceil((this.camY + canvas.height) / CONFIG.TILE));
         for (let wy = ty0; wy <= ty1; wy++) {
           for (let wx = tx0; wx <= tx1; wx++) {
             if (World.tileAt(wx, wy) !== TILE_TYPE.HOUSE) continue;
             const hv = this.hash(wx, wy);
             if (hv < 0.2) continue;   // 少数黑灯的屋子
-            const sx = wx * CONFIG.TILE - this.camX;
-            const sy = wy * CONFIG.TILE - this.camY - 2;
+            const sx = wx * T - this.camX;
+            const sy = wy * T - this.camY - 2;
             ctx.fillStyle = `rgba(255,214,120,${Math.min(1, (night - 0.05) * 1.6)})`;
             ctx.fillRect(sx + 7, sy + 6, 5, 6);
             ctx.fillRect(sx + 20, sy + 6, 5, 6);
@@ -290,8 +321,8 @@ const Render = {
   // 坐标哈希：同一个格子永远得到同一个随机数
   hash(x, y) {
     let h = (x * 374761393 + y * 668265263) | 0;
-    h = (h ^ (h >> 13)) * 1274126177 | 0;
-    return ((h ^ (h >> 16)) >>> 0) / 4294967296;
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
   },
 
   // 静态地面：画进 chunk（world 坐标 wx,wy → chunk 内像素 sx,sy）
@@ -308,10 +339,32 @@ const Render = {
       if (b) g.drawImage(b, sx, sy, CONFIG.TILE, CONFIG.TILE);
     }
     else if (imgs) {
-      const name = imgs[Math.floor(this.hash(wx, wy) * imgs.length)];
+      const name = imgs.length === 1
+        ? imgs[0]
+        : imgs[Math.floor(this.hash(wx, wy) * imgs.length)];
       const img = this.sprites[name];
       if (img && img.complete && img.naturalWidth) {
         g.drawImage(img, sx, sy, CONFIG.TILE, CONFIG.TILE);
+      }
+    }
+
+    // 花：叠在基准草地之上，而不是换掉整格贴图。原先用 tile-flower 替换地面，
+    // 那张图自带的绿底比 tile-grass-2 亮 53%，看着像每丛花自带一块异色地面。
+    // tile-flower-overlay 是抠掉绿底的透明贴图（见 tools/ 生成脚本）。
+    if (t === TILE_TYPE.GRASS) {
+      const fh = this.hash(wx * 11 + 3, wy * 11 + 17);
+      if (fh < 0.2) {   // 20% 的草原格开花
+        const fo = this.sprites['tile-flower-overlay'];
+        if (fo && fo.complete && fo.naturalWidth) {
+          // 4 种翻转朝向，避免同一张花图在 20% 的格子上重复出花纹
+          const f = Math.floor(fh * 20) & 3;
+          const T = CONFIG.TILE, h = T / 2;
+          g.save();
+          g.translate(sx + h, sy + h);
+          g.scale((f & 1) ? -1 : 1, (f & 2) ? -1 : 1);
+          g.drawImage(fo, -h, -h, T, T);
+          g.restore();
+        }
       }
     }
 
@@ -346,8 +399,13 @@ const Render = {
     const cx = sx + CONFIG.TILE / 2;
     const by = sy + CONFIG.TILE;
 
-    // 树改为动态绘制（见 drawTrees）：风吹摆动 + 人物经过弯腰
-    if (t === TILE_TYPE.HOUSE) {
+    // 树冠改为动态绘制（见 drawTrees），但树影是静态的——树冠摆动时影子并不动，
+    // 所以烤进 chunk，省掉每帧重建上千段椭圆路径。位置比原动态版上移 2px，
+    // 让椭圆完整落在本格内；否则会被 chunk 下边界裁掉，每 16 格留一条接缝。
+    if (t === TILE_TYPE.FOREST) {
+      this.shadowOn(g, cx, by - 5, (30 + this.hash(wx, wy) * 12) * 0.3);
+    }
+    else if (t === TILE_TYPE.HOUSE) {
       const isPagoda = this.hash(wx, wy) > 0.86;
       this.shadowOn(g, cx, by - 2, 14);
       if (isPagoda) this.blitOn(g, 'pagoda-2', cx, by - 2, 42, 46);
@@ -361,88 +419,126 @@ const Render = {
 
   // 摇曳的树（动态绘制）：风让树轻轻摆动，人物靠近时树会弯腰让路
   drawTrees(time) {
-    const { ctx } = this;
+    const { ctx, canvas } = this;
     const T = CONFIG.TILE;
+    const img = this.sprites['tree-2'];
+    if (!img || !img.complete || !img.naturalWidth) return;   // 整批共用一张，循环外判一次
     const x0 = Math.max(0, Math.floor(this.camX / T) - 1);
     const y0 = Math.max(0, Math.floor(this.camY / T) - 1);
-    const x1 = Math.min(CONFIG.WORLD_W, Math.ceil((this.camX + innerWidth) / T) + 1);
-    const y1 = Math.min(CONFIG.WORLD_H, Math.ceil((this.camY + innerHeight) / T) + 2);
+    const x1 = Math.min(CONFIG.WORLD_W, Math.ceil((this.camX + canvas.width) / T) + 1);
+    const y1 = Math.min(CONFIG.WORLD_H, Math.ceil((this.camY + canvas.height) / T) + 2);
+    const pxp = Player.x, pyp = Player.y;
 
+    // 先扫描收集，再分两批绘制。buf 跨帧复用，避免每帧产生垃圾
+    const buf = this._treeBuf || (this._treeBuf = []);
+    let n = 0;
     for (let wy = y0; wy < y1; wy++) {
       for (let wx = x0; wx < x1; wx++) {
         if (World.tileAt(wx, wy) !== TILE_TYPE.FOREST) continue;
-        const size = 30 + this.hash(wx, wy) * 12;
+        const size = (30 + this.hash(wx, wy) * 12) | 0;   // 取整 = 预缩放的桶号，误差 <1px
         const cxp = wx * T + T / 2 - this.camX;
         const byp = wy * T + T - this.camY;
 
         // 风：缓慢的全局摆动（每棵树相位不同）
         const wind = Math.sin(time / 750 + wx * 0.04 + wy * 0.02) * 1.6;
         // 人物推移：越近弯得越厉害，方向 = 远离人物
-        const pdx = wx * T + T / 2 - Player.x;
-        const pdy = wy * T + T - Player.y;
-        const d = Math.hypot(pdx, pdy);
+        const pdx = wx * T + T / 2 - pxp;
+        const pdy = wy * T + T - pyp;
+        const d = Math.sqrt(pdx * pdx + pdy * pdy);   // hypot 慢得多
         const R = 88;
         let bend = wind;
         if (d < R) bend += -(pdx / (d || 1)) * (1 - d / R) * 8;
         // 靠得太近：惊飞一群鸟（模块内部有冷却）
         if (d < 34) Ambience.tryScare(wx, wy, pdx, time);
 
-        const shear = bend / size;   // 顶部弯曲像素 → 剪切系数
-        this.shadowOn(ctx, cxp, byp - 3, size * 0.3);
-        ctx.save();
-        ctx.translate(cxp, byp - 2);
-        ctx.transform(1, 0, shear, 1, 0, 0);
-        const img = this.sprites['tree-2'];
-        if (img && img.complete && img.naturalWidth) {
-          ctx.drawImage(img, -size * 0.4, -size, size * 0.8, size);
-        }
-        ctx.restore();
+        buf[n++] = cxp; buf[n++] = byp; buf[n++] = size; buf[n++] = bend / size;
       }
     }
 
-    // 草丛：稀疏点缀在草原上，随风摆动 + 人物拨动
-    let tuftCount = 0, grassCount = 0, firstHash = -1;   // PROBE
-    const typeCounts = {};   // PROBE: 可见范围地形统计
+    // 树影不在这里画：它是静态的，已烤进 chunk（见 drawPropsInto）。
+    // 原先每帧要为上千棵树重建椭圆路径再一次性填充，纯 CPU 开销。
+
+    // 树冠：贴图预缩放到目标尺寸后 1:1 绘制（见 treeCrown），
+    // setTransform 直接写死斜切，省掉每棵树的 save/restore
+    const crowns = this._crowns || (this._crowns = []);
+    for (let i = 0; i < n; i += 4) {
+      const h = buf[i + 2];
+      const s = crowns[h] || this.treeCrown(h);
+      ctx.setTransform(1, 0, buf[i + 3], 1, buf[i], buf[i + 1] - 2);
+      ctx.drawImage(s, -s.width / 2, -h);
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  },
+
+  // 树冠预缩放：源图 96×96，实际只画到 ~34×42。原先每帧对每棵树都做一次 3 倍
+  // 降采样，浏览器为此走的是慢的高质量缩放路径。按整数高度分桶（30~41，12 个）
+  // 预缩放一次，之后每帧都是 1:1 采样。
+  treeCrown(h) {
+    const c = document.createElement('canvas');
+    const w = Math.round(h * 0.8);
+    c.width = w; c.height = h;
+    c.getContext('2d').drawImage(this.sprites['tree-2'], 0, 0, w, h);
+    this._crowns[h] = c;
+    return c;
+  },
+
+  // 草丛（AI 贴图）：夜幕之后绘制 → 夜晚也清晰醒目；风摆 + 人物拨动
+  drawTufts(time) {
+    const { ctx, canvas } = this;
+    const T = CONFIG.TILE;
+    const x0 = Math.max(0, Math.floor(this.camX / T) - 1);
+    const y0 = Math.max(0, Math.floor(this.camY / T) - 1);
+    const x1 = Math.min(CONFIG.WORLD_W, Math.ceil((this.camX + canvas.width) / T) + 1);
+    const y1 = Math.min(CONFIG.WORLD_H, Math.ceil((this.camY + canvas.height) / T) + 2);
+    const pxp = Player.x, pyp = Player.y;
+
+    // 四张变体贴图提到循环外：原先每丛都要拼字符串 + 查表 + 校验完整性
+    const gv = this._grassVariants || (this._grassVariants = []);
+    if (!gv.length) for (let i = 0; i < 4; i++) gv.push(this.sprites['grass-' + i]);
+    let ready = true;
+    for (let i = 0; i < 4; i++) {
+      const g = gv[i];
+      if (!g || !g.complete || !g.naturalWidth) { ready = false; break; }
+    }
+    if (!ready) return;
+    const tufts = this._tufts || (this._tufts = []);
+
     for (let wy = y0; wy < y1; wy++) {
       for (let wx = x0; wx < x1; wx++) {
-        const tt = World.tileAt(wx, wy);
-        typeCounts[tt] = (typeCounts[tt] || 0) + 1;
-        if (tt !== TILE_TYPE.GRASS) continue;
-        grassCount++;
-        const hv = this.hash(wx, wy);
-        if (this._debugHashes && this._debugHashes.length < 5) this._debugHashes.push(hv.toFixed(3));
-        if (hv < 0.65) continue;
-        tuftCount++;   // PROBE
-        const probe = this.sprites['grass-2'];
-        if (probe && probe.complete && probe.naturalWidth) {
-          ctx.drawImage(probe, innerWidth / 2 - 75, 90, 150, 150);   // PROBE: 巨大测试草丛
-        }
-        const bx = wx * T + 4 + hv * 18 - this.camX;
-        const by = wy * T + 26 - this.camY;
+        if (World.tileAt(wx, wy) !== TILE_TYPE.GRASS) continue;
+        // 独立 hash：若沿用 hash(wx, wy) 会与地面贴图变体 floor(hash*5) 完全相关，
+        // 导致草丛只长在变体格上（看着像草丛自带一块异色地面）
+        const hv = this.hash(wx * 7 + 13, wy * 7 + 31);
+        if (hv < 0.55) continue;   // 45% 的草原格有草丛
+        const t01 = (hv - 0.55) / 0.45;   // 归一到 0~1：hv 被门控截断在高段，直接用会偏大
+        const bx = wx * T + 6 + t01 * 20 - this.camX;
+        const by = wy * T + 28 - this.camY;
         // 风摆（草更轻，摆得更快）+ 人物拨动
-        const wind = Math.sin(time / 420 + wx * 0.09 + wy * 0.05) * 4.5;
-        const pdx = wx * T + T / 2 - Player.x, pdy = wy * T + T - Player.y;
-        const d = Math.hypot(pdx, pdy);
+        const wind = Math.sin(time / 420 + wx * 0.09 + wy * 0.05) * 3;
+        const pdx = wx * T + T / 2 - pxp, pdy = wy * T + T - pyp;
+        const d = Math.sqrt(pdx * pdx + pdy * pdy);
         let bend = wind;
-        if (d < 56) bend += -(pdx / (d || 1)) * (1 - d / 56) * 7;
-        const variant = 'grass-' + Math.floor(this.hash(wx * 3 + 5, wy * 3 + 9) * 4);
-        const gimg = this.sprites[variant];
-        if (!gimg || !gimg.complete || !gimg.naturalWidth) continue;
-        const gh = 20 + hv * 14;
-        const gw = gh * gimg.naturalWidth / gimg.naturalHeight;
-        const shear = bend / gh;
-        ctx.save();
-        ctx.translate(bx, by);
-        ctx.transform(1, 0, shear, 1, 0, 0);
-        ctx.drawImage(gimg, -gw / 2, -gh, gw, gh);
-        ctx.restore();
+        if (d < 56) bend += -(pdx / (d || 1)) * (1 - d / 56) * 5;
+        const vi = Math.floor(this.hash(wx * 3 + 5, wy * 3 + 9) * 4);
+        const gh = (15 + t01 * 9) | 0;   // 15~24px，约半格到 3/4 格（TILE=32）；取整 = 预缩放桶号
+        const s = tufts[vi * 32 + gh] || this.tuftSprite(vi, gh);
+        ctx.setTransform(1, 0, bend / gh, 1, bx, by);
+        ctx.drawImage(s, -s.width / 2, -gh);
       }
     }
-    this._tuftCountThisFrame = tuftCount;
-    this._grassCount = grassCount;
-    this._firstHash = firstHash;
-    this._typeCounts = typeCounts;
-    this._debugHashes = this._debugHashes || [];   // 保留前 5 个哈希值
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  },
+
+  // 草丛预缩放，同 treeCrown 的道理：源图 26~42×40，实际只画到 ~20×20，
+  // 一屏最多千余丛，每丛每帧都降采样一次太浪费。4 变体 × 高度 15~24 = 40 张小图。
+  tuftSprite(vi, h) {
+    const img = this._grassVariants[vi];
+    const c = document.createElement('canvas');
+    const w = Math.max(1, Math.round(h * img.naturalWidth / img.naturalHeight));
+    c.width = w; c.height = h;
+    c.getContext('2d').drawImage(img, 0, 0, w, h);
+    this._tufts[vi * 32 + h] = c;
+    return c;
   },
 
   drawPlayer(time) {
@@ -605,13 +701,6 @@ const Render = {
       (city ? `🏘️ ${city}  ` : '') +
       `${move}  M 世界地图`,
       180, 24
-    );
-    // PROBE 诊断行
-    ctx.fillStyle = 'rgba(255,255,255,.6)';
-    const tcS = this._typeCounts ? Object.entries(this._typeCounts).map(([k, v]) => k + ':' + v).join(' ') : '?';
-    ctx.fillText(
-      `草格:${this._grassCount ?? '?'} 草丛:${this._tuftCountThisFrame ?? '?'} 首哈希:${(this._firstHash ?? -1).toFixed(3)} | 类型: ${tcS}`,
-      180, 44
     );
   },
 
