@@ -15,21 +15,10 @@ const Render = {
   tuftCache: new Map(),        // 草丛层缓存 "cx,cy" -> canvas | null（该块无草）
   maskCache: new Map(),        // 水格形状缓存 "cx,cy" -> canvas
 
-  // 人物周围「洞」的半径（格）：静态层在这里被 even-odd 裁剪掉，洞内的草和树
-  // 改为逐帧重画，于是只有人物身边的植被会摆动。
-  //
-  // 半径 3 是算出来的，不是随手取的。洞按格对齐，人物可能贴在自己那格的边缘，
-  // 所以到洞口最近只有 3×32 = 96px。要求：凡是弯曲量非 0 的东西，整个身子都在
-  // 洞内——否则它探到洞外的那部分来自静态层（不弯），洞内那部分弯，接缝处撕开。
-  //   · 树高最多 41px、锚点上移 2px，即从格顶往上探 11px，横向探出 1px
-  //   · 树的弯曲半径 TREE_R = 64：往上数第 3 格的树距人物已 ≥64px（弯曲量 0），
-  //     而第 2 格的树顶在 96px 内 —— 正好卡住
-  //   · 草的弯曲半径 TUFT_R = 56，草又被夹在格内，余量更大
-  // 反过来，洞外可能探进洞内的东西（下一行的树冠、宝塔顶）弯曲量必然是 0，
-  // 逐帧重画的结果与静态层逐像素相同，所以照着重画一遍就接得上。
-  HOLE_T: 3,
-  TREE_R: 64,
-  TUFT_R: 56,
+  // 人物周围「洞」的半径（格）。洞内的草不贴静态层，改为逐帧重画以实现摆动。
+  // 必须大于互动半径 56px：人物贴着格子边缘时距洞口 2×32=64px > 56px，
+  // 保证弯曲量在洞口已衰减到 0，洞里洞外接得上。
+  TUFT_HOLE_T: 2,
 
   // chunk 四周留白：烤进 chunk 的东西会探出所属格子——树冠最高 41px 且锚点上移
   // 2px，探出格顶 11px；宝塔 42×46 探出格顶 16px、左右各 5px。不留白就会被 chunk
@@ -97,9 +86,8 @@ const Render = {
         this.perf.bare = !this.perf.bare;
         this.perf.last = 0;
       }
-      // 1~5 分层开关，6 关掉人物周围的互动（洞不挖、静态层整块贴）：
-      // 关掉某层看帧间隔怎么动，比猜哪层贵可靠
-      if (e.key >= '1' && e.key <= '6') {
+      // 1~5 分层开关：关掉某层看帧间隔怎么动，比猜哪层贵可靠
+      if (e.key >= '1' && e.key <= '5') {
         this.perf.off[e.key] = !this.perf.off[e.key];
         this.perf.last = 0;
       }
@@ -264,11 +252,11 @@ const Render = {
 
   // 性能面板（P 键开关）：各图层耗时用指数滑动平均，否则数字跳得看不清。
   // 存在的意义是别再靠"调用次数推算"猜瓶颈——线上读数字才算证据。
-  BUILD: 28,
+  BUILD: 27,
   perf: {
     on: false, bare: false, off: {},
-    frame: 0, chunk: 0, prop: 0, water: 0, tuft: 0, trees: 0, other: 0,
-    nChunk: 0, nProp: 0, nTuft: 0, last: 0, gap: 0,
+    frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0,
+    nChunk: 0, nTuft: 0, last: 0, gap: 0,
   },
 
   // a 是上一帧均值，b 是本帧实测；0.1 的权重约等于看最近 10 帧
@@ -300,8 +288,8 @@ const Render = {
     if (P.bare) {
       if (P.on) {
         P.frame = this.ema(P.frame, performance.now() - t0);
-        P.chunk = P.prop = P.tuft = P.water = P.trees = P.other = 0;
-        P.nChunk = P.nProp = P.nTuft = 0;
+        P.chunk = P.tuft = P.water = P.trees = P.other = 0;
+        P.nChunk = P.nTuft = 0;
         this.drawPerf();
       }
       return;
@@ -314,42 +302,40 @@ const Render = {
     const cx1 = Math.floor((this.camX + canvas.width) / S);
     const cy1 = Math.floor((this.camY + canvas.height) / S);
 
-    // 一遍贴上所有静态 chunk（地形 + 树 + 建筑），但在人物周围按格挖一个洞，
-    // 洞内的地面/树/建筑改为逐帧重画（见 drawNearProps），于是身边的树会摆动。
+    // 一遍贴上所有静态 chunk（地形 + 树 + 建筑）。
     // 循环自上而下，配合 chunk 顶部留白正好给出对的层次：下方 chunk 后贴，
     // 它留白里探出的树冠会盖住上方 chunk 的地面——下方物体本就更靠近镜头。
     const tChunk = P.on ? performance.now() : 0;
     const PT = this.CHUNK_PAD_T, PXX = this.CHUNK_PAD_X;
-    const H = this.holeRect();
     // 多贴一行下方的 chunk：林内树冠已烤进各自 chunk，视口下边界外那一行树的
     // 冠顶会探进屏幕约 11px。左右不用多贴——
     // 树冠只溢出格子 0.5px，落不到屏内。
     let nc = 0;
-    if (!P.off[1]) {
-      if (H) this.clipOutHole(H);
-      for (let cy = cy0; cy <= cy1 + 1; cy++) {
-        for (let cx = cx0; cx <= cx1; cx++) {
-          if (cx * CONFIG.CHUNK_TILES >= CONFIG.WORLD_W || cy * CONFIG.CHUNK_TILES >= CONFIG.WORLD_H) continue;
-          ctx.drawImage(this.getChunk(cx, cy), cx * S - this.camX - PXX, cy * S - this.camY - PT);
-          nc++;
-        }
+    if (!P.off[1]) for (let cy = cy0; cy <= cy1 + 1; cy++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        if (cx * CONFIG.CHUNK_TILES >= CONFIG.WORLD_W || cy * CONFIG.CHUNK_TILES >= CONFIG.WORLD_H) continue;
+        ctx.drawImage(this.getChunk(cx, cy), cx * S - this.camX - PXX, cy * S - this.camY - PT);
+        nc++;
       }
-      if (H) ctx.restore();
     }
     P.nChunk = nc;
     this.evictFar(Math.floor((this.camX + canvas.width / 2) / S),
                   Math.floor((this.camY + canvas.height / 2) / S));
 
-    // 洞内重画：地面照原样，树带风摆和被人物推开的弯曲
-    const tProp = P.on ? performance.now() : 0;
-    if (H && !P.off[1]) this.drawNearProps(H, time);
-
-    // 草丛：静态层整块贴，洞内的草同样逐帧重画。洞口与格线重合、草丛横向偏移
+    // 草丛：静态层整块贴，但在人物周围按格挖一个洞，洞内的草改为逐帧重画，
+    // 于是只有人物身边的草会摆动、会被拨开。洞口与格线重合、草丛横向偏移
     // 又被夹在格内，所以挖得干净，不会切到邻格静态草的边。
-    // 每帧调用数：约 16 次整块贴图 + 洞内几十丛，而不是满屏 570 丛。
+    // 每帧调用数：约 16 次整块贴图 + 洞内十来丛，而不是满屏 570 丛。
     const tTuft = P.on ? performance.now() : 0;
     if (!P.off[3]) {
-      if (H) this.clipOutHole(H);
+      const T0 = CONFIG.TILE, HR = this.TUFT_HOLE_T;
+      const ptx = Math.floor(Player.x / T0), pty = Math.floor(Player.y / T0);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, canvas.width, canvas.height);
+      ctx.rect((ptx - HR) * T0 - this.camX, (pty - HR) * T0 - this.camY,
+               (HR * 2 + 1) * T0, (HR * 2 + 1) * T0);
+      ctx.clip('evenodd');
       for (let cy = cy0; cy <= cy1; cy++) {
         for (let cx = cx0; cx <= cx1; cx++) {
           if (cx * CONFIG.CHUNK_TILES >= CONFIG.WORLD_W || cy * CONFIG.CHUNK_TILES >= CONFIG.WORLD_H) continue;
@@ -357,9 +343,8 @@ const Render = {
           if (tl) ctx.drawImage(tl, cx * S - this.camX, cy * S - this.camY);
         }
       }
-      if (H) ctx.restore();
-      if (H) this.drawNearTufts(H, time);
-      else P.nTuft = 0;
+      ctx.restore();
+      this.drawNearTufts(time);
     }
 
     // 动态层：水面特效（云影 + 水面涟漪）、雨珠溅落
@@ -439,8 +424,7 @@ const Render = {
 
     if (P.on) {
       const end = performance.now();
-      P.chunk = this.ema(P.chunk, tProp - tChunk);
-      P.prop = this.ema(P.prop, tTuft - tProp);
+      P.chunk = this.ema(P.chunk, tTuft - tChunk);
       P.tuft = this.ema(P.tuft, tWater - tTuft);
       P.water = this.ema(P.water, tTrees - tWater);
       P.trees = this.ema(P.trees, tRest - tTrees);
@@ -470,7 +454,6 @@ const Render = {
       `3 草丛   ${sw(3)} ${f(P.tuft)} ×${P.nTuft}`,
       `4 氛围雨 ${sw(4)}`,
       `5 夜色   ${sw(5)}`,
-      `6 洞内   ${sw(6)} ${f(P.prop)} ×${P.nProp}`,
       `惊鸟 ${f(P.trees)}   其余 ${f(P.other)}`,
     ];
     ctx.font = '12px Consolas, monospace';
@@ -567,9 +550,9 @@ const Render = {
     const cx = sx + CONFIG.TILE / 2;
     const by = sy + CONFIG.TILE;
 
-    // 树和树影烤进 chunk：满屏七百多棵树，逐棵每帧带斜切地画一次，JS 只占 3.3ms
-    // 而 GPU 要 20ms——瓶颈是绘制调用数（每次 setTransform 都打断批处理）。
-    // 只有人物周围那个洞里的十几棵改为逐帧重画来实现摆动，见 drawTreeSway。
+    // 树和树影全部烤进 chunk：不再有任何逐树的每帧绘制。
+    // 实测树林 43fps 时 JS 只占 3.3ms，20ms 全在 GPU 啃七百多次带斜切的
+    // drawImage——瓶颈是绘制调用数，摆动效果换不来这个代价，所以整个砍掉。
     if (t === TILE_TYPE.FOREST) {
       const size = (30 + this.hash(wx, wy) * 12) | 0;
       this.shadowOn(g, cx, by - 5, size * 0.3);
@@ -653,94 +636,13 @@ const Render = {
     return c;
   },
 
-  // 人物周围那个洞：格对齐的矩形，屏幕坐标。6 键关掉互动时返回 null，
-  // 静态层就整块贴、什么都不重画——用来量这套互动到底花了多少。
-  holeRect() {
-    if (this.perf.off[6]) return null;
-    const T = CONFIG.TILE, R = this.HOLE_T;
-    const ptx = Math.floor(Player.x / T), pty = Math.floor(Player.y / T);
-    return {
-      ptx, pty, R,
-      x: (ptx - R) * T - this.camX, y: (pty - R) * T - this.camY,
-      w: (R * 2 + 1) * T, h: (R * 2 + 1) * T,
-    };
-  },
-
-  // even-odd 两个矩形：整屏 + 洞，覆盖数为偶的区域（洞）被排除。
-  // 调用方负责 restore。
-  clipOutHole(H) {
-    const { ctx, canvas } = this;
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, 0, canvas.width, canvas.height);
-    ctx.rect(H.x, H.y, H.w, H.h);
-    ctx.clip('evenodd');
-  },
-
-  // 洞内重画地面与静态物件，其中树带风摆。
-  // 扫描范围比洞大一格：下一行的树冠、宝塔顶会探进洞内，那部分静态层已被挖掉，
-  // 得补上。这些边界物件距人物必然超过 TREE_R，弯曲量为 0，画出来与静态层
-  // 逐像素相同（同一个 blitOn、同样的整数坐标），所以洞口看不出接缝。
-  // 逐行、每格先地面后物件——必须与 getChunk 的烘焙顺序一致，否则右邻格的地面
-  // 压树边这类细节会不一样。
-  drawNearProps(H, time) {
-    const { ctx } = this;
-    const T = CONFIG.TILE, R = H.R;
-    let n = 0;
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(H.x, H.y, H.w, H.h);
-    ctx.clip();
-    for (let wy = H.pty - R - 1; wy <= H.pty + R + 1; wy++) {
-      for (let wx = H.ptx - R - 1; wx <= H.ptx + R + 1; wx++) {
-        if (!World.inBounds(wx, wy)) continue;
-        const sx = wx * T - this.camX, sy = wy * T - this.camY;
-        const inHole = Math.abs(wx - H.ptx) <= R && Math.abs(wy - H.pty) <= R;
-        if (inHole) this.drawGroundInto(ctx, wx, wy, sx, sy);
-        const t = World.tileAt(wx, wy);
-        if (t === TILE_TYPE.FOREST) { this.drawTreeSway(wx, wy, sx, sy, time); n++; }
-        else {
-          this.drawPropsInto(ctx, wx, wy, sx, sy);
-          if (t === TILE_TYPE.HOUSE || t === TILE_TYPE.FOUNTAIN) n++;
-        }
-      }
-    }
-    ctx.restore();
-    this.perf.nProp = n;
-  },
-
-  // 一棵会摆的树。弯曲量 = 风 + 人物推开，整体乘距离衰减，到 TREE_R 处归零。
-  // 归零时走和烘焙完全相同的 blitOn（不设 transform），保证与静态层逐像素一致。
-  drawTreeSway(wx, wy, sx, sy, time) {
-    const T = CONFIG.TILE;
-    const cx = sx + T / 2, by = sy + T;
-    const size = (30 + this.hash(wx, wy) * 12) | 0;
-    const w = Math.round(size * 0.8);
-    this.shadowOn(this.ctx, cx, by - 5, size * 0.3);   // 影子不跟着摆
-
-    const pdx = wx * T + T / 2 - Player.x, pdy = wy * T + T - Player.y;
-    const d = Math.sqrt(pdx * pdx + pdy * pdy);
-    const fade = d >= this.TREE_R ? 0 : 1 - d / this.TREE_R;
-    if (fade <= 0) { this.blitOn(this.ctx, 'tree-2', cx, by - 2, w, size); return; }
-
-    // 风比草慢、幅度大一点；相邻树错开相位，免得整片林子像一块板子在晃
-    const wind = Math.sin(time / 900 + wx * 0.7 + wy * 0.45) * 4.5;
-    const bend = (wind - (pdx / (d || 1)) * 4) * fade;
-    const img = this.sprites['tree-2'];
-    if (!img || !img.complete || !img.naturalWidth) return;
-    const { ctx } = this;
-    ctx.setTransform(1, 0, bend / size, 1, cx, by - 2);   // 以树根为原点做斜切
-    ctx.drawImage(img, -w / 2, -size, w, size);
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-  },
-
   // 人物周围那个洞里的草：逐帧重画，带风摆和被人物拨开的弯曲。
   // 弯曲量在互动半径边缘衰减到 0，而洞比互动半径大——所以洞口那一圈草画出来
   // 与静态版逐像素相同，草进出洞口不会突然抖一下。
-  drawNearTufts(H, time) {
+  drawNearTufts(time) {
     const { ctx } = this;
-    const T = CONFIG.TILE, R = H.R, PR = this.TUFT_R;
-    const ptx = H.ptx, pty = H.pty;
+    const T = CONFIG.TILE, R = this.TUFT_HOLE_T, PR = 56;
+    const ptx = Math.floor(Player.x / T), pty = Math.floor(Player.y / T);
     let n = 0;
     for (let wy = pty - R; wy <= pty + R; wy++) {
       for (let wx = ptx - R; wx <= ptx + R; wx++) {
@@ -749,21 +651,17 @@ const Render = {
         if (World.tileAt(wx, wy + 1) === TILE_TYPE.FOREST) continue;
         const t = this.tuftAt(wx, wy);
         if (!t) continue;
-        const dx = wx * T + t.ox - this.camX, dy = wy * T + 28 - t.gh - this.camY;
         const pdx = wx * T + T / 2 - Player.x, pdy = wy * T + T - Player.y;
         const d = Math.sqrt(pdx * pdx + pdy * pdy);
-        n++;
-        // 衰减到 0 的那些草走普通贴图：省掉一次 setTransform（每次 transform
-        // 都打断 GPU 批处理，这正是当初满屏 570 丛掉到 47fps 的原因）
-        if (d >= PR) { ctx.drawImage(t.s, dx, dy); continue; }
-        const fade = 1 - d / PR;
+        const fade = d >= PR ? 0 : 1 - d / PR;
         const wind = Math.sin(time / 420 + wx * 0.09 + wy * 0.05) * 3;
         const bend = (wind - (pdx / (d || 1)) * 5) * fade;
-        ctx.setTransform(1, 0, bend / t.gh, 1, dx, dy + t.gh);
+        ctx.setTransform(1, 0, bend / t.gh, 1, wx * T + t.ox - this.camX, wy * T + 28 - this.camY);
         ctx.drawImage(t.s, 0, -t.gh);
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        n++;
       }
     }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     this.perf.nTuft = n;
   },
 
