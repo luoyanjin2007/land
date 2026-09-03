@@ -70,6 +70,11 @@ const Ambience = {
       f.x += Math.sin(time / 800 + f.phase) * 11 * dt;
       f.y += Math.cos(time / 650 + f.phase * 1.7) * 8 * dt;
     }
+    // 漂出镜头视野的萤火虫移除 → 让生成器持续在玩家附近补充（整夜可见）
+    const ccx = Render.camX + innerWidth / 2, ccy = Render.camY + innerHeight / 2;
+    this.flies = this.flies.filter(f =>
+      Math.abs(f.x - ccx) < innerWidth * 0.75 &&
+      Math.abs(f.y - ccy) < innerHeight * 0.75);
     if (night < 0.15 && this.flies.length) this.flies.length = Math.max(0, this.flies.length - 2);
   },
 

@@ -401,11 +401,17 @@ const Render = {
     }
 
     // 草丛：稀疏点缀在草原上，随风摆动 + 人物拨动
+    let tuftCount = 0, grassCount = 0, firstHash = -1;   // PROBE
     for (let wy = y0; wy < y1; wy++) {
       for (let wx = x0; wx < x1; wx++) {
         if (World.tileAt(wx, wy) !== TILE_TYPE.GRASS) continue;
         const hv = this.hash(wx, wy);
         if (hv < 0.65) continue;
+        tuftCount++;   // PROBE
+        const probe = this.sprites['grass-2'];
+        if (probe && probe.complete && probe.naturalWidth) {
+          ctx.drawImage(probe, innerWidth / 2 - 75, 90, 150, 150);   // PROBE: 巨大测试草丛
+        }
         const bx = wx * T + 4 + hv * 18 - this.camX;
         const by = wy * T + 26 - this.camY;
         // 风摆（草更轻，摆得更快）+ 人物拨动
@@ -589,6 +595,12 @@ const Render = {
       (city ? `🏘️ ${city}  ` : '') +
       `${move}  M 世界地图`,
       180, 24
+    );
+    // PROBE 诊断行
+    ctx.fillStyle = 'rgba(255,255,255,.6)';
+    ctx.fillText(
+      `草格:${this._grassCount ?? '?'} 草丛:${this._tuftCountThisFrame ?? '?'} 首哈希:${(this._firstHash ?? -1).toFixed(3)} camY:${Math.round(this.camY)} camX:${Math.round(this.camX)}`,
+      180, 44
     );
   },
 
