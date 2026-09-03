@@ -243,11 +243,11 @@ const Render = {
 
   // 性能面板（P 键开关）：各图层耗时用指数滑动平均，否则数字跳得看不清。
   // 存在的意义是别再靠"调用次数推算"猜瓶颈——线上读数字才算证据。
-  BUILD: 25,
+  BUILD: 26,
   perf: {
     on: false, bare: false, off: {},
     frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0,
-    nChunk: 0, nTuft: 0, last: 0, gap: 0,
+    nChunk: 0, last: 0, gap: 0,
   },
 
   // a 是上一帧均值，b 是本帧实测；0.1 的权重约等于看最近 10 帧
@@ -279,8 +279,8 @@ const Render = {
     if (P.bare) {
       if (P.on) {
         P.frame = this.ema(P.frame, performance.now() - t0);
-        P.chunk = P.water = P.tuft = P.trees = P.other = 0;
-        P.nChunk = P.nTuft = 0;
+        P.chunk = P.water = P.trees = P.other = 0;
+        P.nChunk = 0;
         this.drawPerf();
       }
       return;
@@ -347,12 +347,8 @@ const Render = {
       ctx.fill();
     }
 
-    // 草丛在树之前：矮草被树冠和人物盖住才对。必须画在夜幕压暗之前——
-    // 原先放在夜幕之后（图省事让它夜里醒目），结果它是全场唯一不受夜色影响的图层。
-    const tTuft = P.on ? performance.now() : 0;
-    if (!P.off[3]) this.drawTufts(time);
+    // 草丛已全部烤进 chunk（见 tuftInto），这里只剩惊鸟判定
     const tTrees = P.on ? performance.now() : 0;
-    // 树冠已全部烤进 chunk，这里只剩惊鸟判定
     this.scareBirds(time);
     const tRest = P.on ? performance.now() : 0;
 
@@ -393,8 +389,7 @@ const Render = {
     if (P.on) {
       const end = performance.now();
       P.chunk = this.ema(P.chunk, tWater - tChunk);
-      P.water = this.ema(P.water, tTuft - tWater);
-      P.tuft = this.ema(P.tuft, tTrees - tTuft);
+      P.water = this.ema(P.water, tTrees - tWater);
       P.trees = this.ema(P.trees, tRest - tTrees);
       P.other = this.ema(P.other, (end - t0) - (tRest - tChunk));
       P.frame = this.ema(P.frame, end - t0);
@@ -419,7 +414,6 @@ const Render = {
       `─────────────`,
       `1 chunk ${sw(1)} ${f(P.chunk)} ×${P.nChunk}`,
       `2 水面   ${sw(2)} ${f(P.water)}`,
-      `3 草丛   ${sw(3)} ${f(P.tuft)} ×${P.nTuft}`,
       `4 氛围雨 ${sw(4)}`,
       `5 夜色   ${sw(5)}`,
       `惊鸟 ${f(P.trees)}   其余 ${f(P.other)}`,
@@ -536,27 +530,30 @@ const Render = {
     else if (t === TILE_TYPE.FOUNTAIN) {
       this.blitOn(g, 'fountain', cx, by - 2, 40, 40);
     }
-    // 紧贴森林北侧的草丛也烤进来：树冠会探进北边草格 11px，而 chunk 整体贴在
-    // 动态草丛层之前，那里的草丛会压在树冠上面（南边的树本该遮住北边的草）。
-    // 烤进 chunk 则由逐行绘制顺序保证树后画、遮挡正确；代价只是这一圈草不摆。
-    else if (t === TILE_TYPE.GRASS && World.tileAt(wx, wy + 1) === TILE_TYPE.FOREST) {
+    // 草丛全部烤进 chunk。原先每丛草每帧都要一次 setTransform + drawImage 做风摆，
+    // 密草区 570 丛就是 570 次带剪切变换的调用，GPU 无法批处理——实测关掉这一层
+    // 帧率立刻从 47fps 回到上限 62fps，是当时唯一的瓶颈。
+    // 代价：草不再随风摆动，也不再被人物拨开。
+    else if (t === TILE_TYPE.GRASS) {
       this.tuftInto(g, wx, wy, sx, sy);
     }
   },
 
-  // 静态草丛（烤进 chunk 用）。摆放参数与 drawTufts 里的动态版必须逐字一致，
-  // 否则同一格会长出位置或高度不同的两丛草。
+  // 草丛，烤进 chunk。45% 的草格长草，高度/变体/横向偏移都由坐标哈希决定，
+  // 所以同一个世界种子长出的草永远在同一处。
   tuftInto(g, wx, wy, sx, sy) {
     const gv = this._grassVariants || (this._grassVariants = []);
     if (!gv.length) for (let i = 0; i < 4; i++) gv.push(this.sprites['grass-' + i]);
     for (let i = 0; i < 4; i++) {
       if (!gv[i] || !gv[i].complete || !gv[i].naturalWidth) return;
     }
+    // 独立 hash：若沿用 hash(wx, wy) 会与地面贴图变体 floor(hash*5) 完全相关，
+    // 草丛就只长在变体格上，看着像草丛自带一块异色地面
     const hv = this.hash(wx * 7 + 13, wy * 7 + 31);
-    if (hv < 0.55) return;
-    const t01 = (hv - 0.55) / 0.45;
+    if (hv < 0.55) return;                // 45% 的草格长草
+    const t01 = (hv - 0.55) / 0.45;       // 归一到 0~1：hv 被门控截断在高段，直接用会偏大
     const vi = Math.floor(this.hash(wx * 3 + 5, wy * 3 + 9) * 4);
-    const gh = (15 + t01 * 9) | 0;
+    const gh = (15 + t01 * 9) | 0;        // 15~24px，约半格到 3/4 格；取整 = 预缩放桶号
     const tufts = this._tufts || (this._tufts = []);
     const s = tufts[vi * 32 + gh] || this.tuftSprite(vi, gh);
     g.drawImage(s, sx + 6 + t01 * 20 - s.width / 2, sy + 28 - gh);
@@ -574,58 +571,6 @@ const Render = {
         if (pdx * pdx + pdy * pdy < 34 * 34) Ambience.tryScare(wx, wy, pdx, time);
       }
     }
-  },
-
-  // 草丛（AI 贴图）：夜幕之后绘制 → 夜晚也清晰醒目；风摆 + 人物拨动
-  drawTufts(time) {
-    const { ctx, canvas } = this;
-    const T = CONFIG.TILE;
-    const x0 = Math.max(0, Math.floor(this.camX / T) - 1);
-    const y0 = Math.max(0, Math.floor(this.camY / T) - 1);
-    const x1 = Math.min(CONFIG.WORLD_W, Math.ceil((this.camX + canvas.width) / T) + 1);
-    const y1 = Math.min(CONFIG.WORLD_H, Math.ceil((this.camY + canvas.height) / T) + 2);
-    const pxp = Player.x, pyp = Player.y;
-
-    // 四张变体贴图提到循环外：原先每丛都要拼字符串 + 查表 + 校验完整性
-    const gv = this._grassVariants || (this._grassVariants = []);
-    if (!gv.length) for (let i = 0; i < 4; i++) gv.push(this.sprites['grass-' + i]);
-    let ready = true;
-    for (let i = 0; i < 4; i++) {
-      const g = gv[i];
-      if (!g || !g.complete || !g.naturalWidth) { ready = false; break; }
-    }
-    if (!ready) return;
-    const tufts = this._tufts || (this._tufts = []);
-    let nt = 0;
-
-    for (let wy = y0; wy < y1; wy++) {
-      for (let wx = x0; wx < x1; wx++) {
-        if (World.tileAt(wx, wy) !== TILE_TYPE.GRASS) continue;
-        // 紧贴森林北侧的这一格已烤进 chunk（见 tuftInto），跳过以免重复
-        if (World.tileAt(wx, wy + 1) === TILE_TYPE.FOREST) continue;
-        // 独立 hash：若沿用 hash(wx, wy) 会与地面贴图变体 floor(hash*5) 完全相关，
-        // 导致草丛只长在变体格上（看着像草丛自带一块异色地面）
-        const hv = this.hash(wx * 7 + 13, wy * 7 + 31);
-        if (hv < 0.55) continue;   // 45% 的草原格有草丛
-        const t01 = (hv - 0.55) / 0.45;   // 归一到 0~1：hv 被门控截断在高段，直接用会偏大
-        const bx = wx * T + 6 + t01 * 20 - this.camX;
-        const by = wy * T + 28 - this.camY;
-        // 风摆（草更轻，摆得更快）+ 人物拨动
-        const wind = Math.sin(time / 420 + wx * 0.09 + wy * 0.05) * 3;
-        const pdx = wx * T + T / 2 - pxp, pdy = wy * T + T - pyp;
-        const d = Math.sqrt(pdx * pdx + pdy * pdy);
-        let bend = wind;
-        if (d < 56) bend += -(pdx / (d || 1)) * (1 - d / 56) * 5;
-        const vi = Math.floor(this.hash(wx * 3 + 5, wy * 3 + 9) * 4);
-        const gh = (15 + t01 * 9) | 0;   // 15~24px，约半格到 3/4 格（TILE=32）；取整 = 预缩放桶号
-        const s = tufts[vi * 32 + gh] || this.tuftSprite(vi, gh);
-        ctx.setTransform(1, 0, bend / gh, 1, bx, by);
-        ctx.drawImage(s, -s.width / 2, -gh);
-        nt++;
-      }
-    }
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    this.perf.nTuft = nt;
   },
 
   // 草丛预缩放，同 treeCrown 的道理：源图 26~42×40，实际只画到 ~20×20，
