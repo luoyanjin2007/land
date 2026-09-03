@@ -352,7 +352,8 @@ const World = {
     if (e < 0.30) return TILE_TYPE.WATER;   // 内陆湖
     if (e < 0.33) return TILE_TYPE.SAND;    // 湖岸
     if (e < 0.68) {
-      return this.forestN(x, y) > 0.68 ? TILE_TYPE.FOREST : TILE_TYPE.GRASS;
+      const n = this.forestN(x, y) + (this.hash(x + 7, y + 3) - 0.5) * 0.12;
+      return n > 0.68 ? TILE_TYPE.FOREST : TILE_TYPE.GRASS;   // 碎林（边缘抖动不规则）
     }
     return TILE_TYPE.MOUNTAIN;
   },

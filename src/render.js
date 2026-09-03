@@ -405,7 +405,7 @@ const Render = {
       for (let wx = x0; wx < x1; wx++) {
         if (World.tileAt(wx, wy) !== TILE_TYPE.GRASS) continue;
         const hv = this.hash(wx, wy);
-        if (hv < 0.80) continue;
+        if (hv < 0.72) continue;
         const bx = wx * T + 4 + hv * 18 - this.camX;
         const by = wy * T + 26 - this.camY;
         // 风摆（草更轻，摆得更快）+ 人物拨动
@@ -414,12 +414,12 @@ const Render = {
         const d = Math.hypot(pdx, pdy);
         let bend = wind;
         if (d < 56) bend += -(pdx / (d || 1)) * (1 - d / 56) * 5;
-        ctx.strokeStyle = 'rgba(36,100,44,.9)';
-        ctx.lineWidth = 1.6;
-        for (const b of [-3, 0, 3]) {
+        ctx.strokeStyle = 'rgba(126,200,92,.95)';
+        ctx.lineWidth = 1.9;
+        for (const b of [-4, -1.5, 1.5, 4]) {
           ctx.beginPath();
           ctx.moveTo(bx + b, by);
-          ctx.quadraticCurveTo(bx + b + bend * 0.5, by - 7, bx + b + bend, by - 13);
+          ctx.quadraticCurveTo(bx + b + bend * 0.6, by - 10, bx + b + bend, by - 18);
           ctx.stroke();
         }
       }
