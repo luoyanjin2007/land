@@ -405,21 +405,26 @@ const Render = {
       for (let wx = x0; wx < x1; wx++) {
         if (World.tileAt(wx, wy) !== TILE_TYPE.GRASS) continue;
         const hv = this.hash(wx, wy);
-        if (hv < 0.72) continue;
+        if (hv < 0.65) continue;
         const bx = wx * T + 4 + hv * 18 - this.camX;
         const by = wy * T + 26 - this.camY;
         // 风摆（草更轻，摆得更快）+ 人物拨动
-        const wind = Math.sin(time / 420 + wx * 0.09 + wy * 0.05) * 3.2;
+        const wind = Math.sin(time / 420 + wx * 0.09 + wy * 0.05) * 4.5;
         const pdx = wx * T + T / 2 - Player.x, pdy = wy * T + T - Player.y;
         const d = Math.hypot(pdx, pdy);
         let bend = wind;
-        if (d < 56) bend += -(pdx / (d || 1)) * (1 - d / 56) * 5;
-        ctx.strokeStyle = 'rgba(126,200,92,.95)';
-        ctx.lineWidth = 1.9;
-        for (const b of [-4, -1.5, 1.5, 4]) {
+        if (d < 56) bend += -(pdx / (d || 1)) * (1 - d / 56) * 7;
+        // 根部小土影（让草丛读作一个「物体」）
+        ctx.fillStyle = 'rgba(30,60,25,.35)';
+        ctx.beginPath();
+        ctx.ellipse(bx, by - 1, 7, 2.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(160,225,110,.95)';
+        ctx.lineWidth = 2.4;
+        for (const b of [-5, -2, 1, 4]) {
           ctx.beginPath();
           ctx.moveTo(bx + b, by);
-          ctx.quadraticCurveTo(bx + b + bend * 0.6, by - 10, bx + b + bend, by - 18);
+          ctx.quadraticCurveTo(bx + b + bend * 0.6, by - 14, bx + b + bend * 1.3, by - 24);
           ctx.stroke();
         }
       }
