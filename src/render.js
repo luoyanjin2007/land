@@ -8,7 +8,7 @@
 
 const Render = {
   canvas: null, ctx: null,
-  camX: 0, camY: 0,
+  camX: 0, camY: 0, camFX: 0, camFY: 0,
   miniCanvas: null,
   sprites: {},                 // 贴图缓存 name -> Image
   chunkCache: new Map(),       // 地形 chunk 缓存 "cx,cy" -> canvas
@@ -66,7 +66,9 @@ const Render = {
 
   init(canvas) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d');
+    // alpha: false —— 背景每帧整屏填满，画布下面什么都看不到。带 alpha 的画布
+    // 浏览器要多做一次与页面的合成，关掉直接省掉这一遍整屏的读改写。
+    this.ctx = canvas.getContext('2d', { alpha: false });
     this.resize();
     addEventListener('resize', () => this.resize());
     addEventListener('keydown', (e) => {
@@ -141,25 +143,31 @@ const Render = {
     return (typeof WorldMap !== 'undefined' && WorldMap.fogMini) ? WorldMap.fogMini : this.miniCanvas;
   },
 
+  // 镜头有两套坐标：camFX/camFY 是平滑跟随用的浮点真值，camX/camY 是取整后
+  // 给渲染用的。小数坐标的 drawImage 会强制浏览器对整张源图做双线性重采样——
+  // 满屏 16 个 chunk 每帧就是 400 多万像素的无谓重算，取整后走整数快速拷贝。
+  // 代价是镜头以整像素步进，但一帧移动好几像素，看不出来。
   snapCamera() {
-    this.camX = Player.x - this.canvas.width / 2;
-    this.camY = Player.y - this.canvas.height / 2;
+    this.camFX = Player.x - this.canvas.width / 2;
+    this.camFY = Player.y - this.canvas.height / 2;
     this.clampCamera();
   },
 
   clampCamera() {
     const maxX = CONFIG.WORLD_W * CONFIG.TILE - this.canvas.width;
     const maxY = CONFIG.WORLD_H * CONFIG.TILE - this.canvas.height;
-    this.camX = Math.max(0, Math.min(maxX, this.camX));
-    this.camY = Math.max(0, Math.min(maxY, this.camY));
+    this.camFX = Math.max(0, Math.min(maxX, this.camFX));
+    this.camFY = Math.max(0, Math.min(maxY, this.camFY));
+    this.camX = Math.round(this.camFX);
+    this.camY = Math.round(this.camFY);
   },
 
   updateCamera(dt) {
     const targetX = Player.x - this.canvas.width / 2;
     const targetY = Player.y - this.canvas.height / 2;
     const k = 1 - Math.pow(0.001, dt);
-    this.camX += (targetX - this.camX) * k;
-    this.camY += (targetY - this.camY) * k;
+    this.camFX += (targetX - this.camFX) * k;
+    this.camFY += (targetY - this.camFY) * k;
     this.clampCamera();
   },
 
