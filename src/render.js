@@ -13,6 +13,14 @@ const Render = {
   sprites: {},                 // 贴图缓存 name -> Image
   chunkCache: new Map(),       // 地形 chunk 缓存 "cx,cy" -> canvas
   maskCache: new Map(),        // 水格形状缓存 "cx,cy" -> canvas
+  treeEdge: null,              // 每格 1 字节：1 = 林缘树（动态摆动），0 = 林内树（烤进 chunk）
+
+  // chunk 四周留白：烤进 chunk 的东西会探出所属格子——树冠最高 41px 且锚点再上移
+  // 2px，探出格顶 11px；宝塔 42×46 也探出格顶 14px、左右各 5px。不留白就会被 chunk
+  // 边界切平，每 16 格一条缝。上方给足 48px，左右 8px（树冠 33px 宽居中于 32px 格，
+  // 各溢出 0.5px；宝塔溢出 5px）。下方不需要：树影在格内，冠底也不过格底。
+  CHUNK_PAD_T: 48,
+  CHUNK_PAD_X: 8,
 
   COLORS: {
     [TILE_TYPE.WATER]: '#1e5588',
@@ -70,8 +78,35 @@ const Render = {
     });
     this.loadSprites();
     this.buildBridgeTile();
+    this.bakeTreeEdge();
     this.bakeMinimap();
     this.snapCamera();
+  },
+
+  // 标记哪些树是「林缘」：8 邻域里只要有一格不是森林就算。
+  // 只有林缘树需要每帧动态绘制——GPU 瓶颈来自绘制调用数（实测树林 43fps 时
+  // JS 仅 3.3ms，剩下 20ms 全在 GPU 啃 757 次带斜切的 drawImage），
+  // 林内树看不到轮廓、被邻树遮挡，静止也不易察觉，烤进 chunk 后调用数降七成。
+  // 一次性算好存表，避免每帧对每棵树做 8 次邻域查询。
+  bakeTreeEdge() {
+    const W = CONFIG.WORLD_W, H = CONFIG.WORLD_H;
+    const e = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (World.tileAt(x, y) !== TILE_TYPE.FOREST) continue;
+        let edge = false;
+        for (let dy = -1; dy <= 1 && !edge; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (!dx && !dy) continue;
+            const nx = x + dx, ny = y + dy;
+            // 越界当作非森林：世界边缘的树也归林缘，数量极少无所谓
+            if (!World.inBounds(nx, ny) || World.tileAt(nx, ny) !== TILE_TYPE.FOREST) { edge = true; break; }
+          }
+        }
+        if (edge) e[y * W + x] = 1;
+      }
+    }
+    this.treeEdge = e;
   },
 
   // 程序化木桥贴图：棕色木板 + 板缝 + 木纹高光
@@ -176,13 +211,14 @@ const Render = {
     if (c) return c;
     c = document.createElement('canvas');
     const S = CONFIG.CHUNK_PX;
-    c.width = c.height = S;
+    const PT = this.CHUNK_PAD_T, PXX = this.CHUNK_PAD_X;
+    c.width = S + PXX * 2; c.height = S + PT;
     const g = c.getContext('2d');
     for (let y = 0; y < CONFIG.CHUNK_TILES; y++) {
       for (let x = 0; x < CONFIG.CHUNK_TILES; x++) {
         const wx = cx * CONFIG.CHUNK_TILES + x, wy = cy * CONFIG.CHUNK_TILES + y;
         if (!World.inBounds(wx, wy)) continue;
-        const sx = x * CONFIG.TILE, sy = y * CONFIG.TILE;
+        const sx = x * CONFIG.TILE + PXX, sy = y * CONFIG.TILE + PT;
         this.drawGroundInto(g, wx, wy, sx, sy);
         this.drawPropsInto(g, wx, wy, sx, sy);
       }
@@ -251,12 +287,18 @@ const Render = {
     const cx1 = Math.floor((this.camX + canvas.width) / S);
     const cy1 = Math.floor((this.camY + canvas.height) / S);
 
-    // 一遍贴上所有静态 chunk（地形 + 树 + 建筑）
+    // 一遍贴上所有静态 chunk（地形 + 树 + 建筑）。
+    // 循环自上而下，配合 chunk 顶部留白正好给出对的层次：下方 chunk 后贴，
+    // 它留白里探出的树冠会盖住上方 chunk 的地面——下方物体本就更靠近镜头。
     const tChunk = P.on ? performance.now() : 0;
-    for (let cy = cy0; cy <= cy1; cy++) {
+    const PT = this.CHUNK_PAD_T, PXX = this.CHUNK_PAD_X;
+    // 多贴一行下方的 chunk：林内树冠已烤进各自 chunk，视口下边界外那一行树的
+    // 冠顶会探进屏幕约 11px（原先由 drawTrees 多扫 2 格覆盖到）。左右不用多贴——
+    // 树冠只溢出格子 0.5px，落不到屏内。
+    for (let cy = cy0; cy <= cy1 + 1; cy++) {
       for (let cx = cx0; cx <= cx1; cx++) {
         if (cx * CONFIG.CHUNK_TILES >= CONFIG.WORLD_W || cy * CONFIG.CHUNK_TILES >= CONFIG.WORLD_H) continue;
-        ctx.drawImage(this.getChunk(cx, cy), cx * S - this.camX, cy * S - this.camY);
+        ctx.drawImage(this.getChunk(cx, cy), cx * S - this.camX - PXX, cy * S - this.camY - PT);
       }
     }
 
@@ -461,11 +503,16 @@ const Render = {
     const cx = sx + CONFIG.TILE / 2;
     const by = sy + CONFIG.TILE;
 
-    // 树冠改为动态绘制（见 drawTrees），但树影是静态的——树冠摆动时影子并不动，
-    // 所以烤进 chunk，省掉每帧重建上千段椭圆路径。位置比原动态版上移 2px，
-    // 让椭圆完整落在本格内；否则会被 chunk 下边界裁掉，每 16 格留一条接缝。
+    // 树影是静态的——树冠摆动时影子并不动，所以烤进 chunk，省掉每帧重建上千段
+    // 椭圆路径。位置比原动态版上移 2px，让椭圆完整落在本格内；否则会被 chunk
+    // 下边界裁掉，每 16 格留一条接缝。
+    // 林内树的树冠也一起烤进来（见 bakeTreeEdge）；林缘树的冠由 drawTrees 动态画。
     if (t === TILE_TYPE.FOREST) {
-      this.shadowOn(g, cx, by - 5, (30 + this.hash(wx, wy) * 12) * 0.3);
+      const size = (30 + this.hash(wx, wy) * 12) | 0;
+      this.shadowOn(g, cx, by - 5, size * 0.3);
+      if (!this.treeEdge[wy * CONFIG.WORLD_W + wx]) {
+        this.blitOn(g, 'tree-2', cx, by - 2, Math.round(size * 0.8), size);
+      }
     }
     else if (t === TILE_TYPE.HOUSE) {
       const isPagoda = this.hash(wx, wy) > 0.86;
@@ -491,27 +538,37 @@ const Render = {
     const y1 = Math.min(CONFIG.WORLD_H, Math.ceil((this.camY + canvas.height) / T) + 2);
     const pxp = Player.x, pyp = Player.y;
 
-    // 先扫描收集，再分两批绘制。buf 跨帧复用，避免每帧产生垃圾
+    // 先扫描收集，再统一绘制。buf 跨帧复用，避免每帧产生垃圾。
+    // 只绘制林缘树：林内树的冠已烤进 chunk（见 drawPropsInto），再动态画一遍会
+    // 露出底下那棵静止的重影。跳过它们每帧省掉 ~550 次 setTransform + drawImage，
+    // 提交给 GPU 的绘制调用降到约 1/4——实测瓶颈正在这里（树林 43fps 时 JS 只占 3.3ms）。
+    // 代价：林子深处的树不再随风摆、也不给人物弯腰让路；惊鸟仍对所有树生效。
     const buf = this._treeBuf || (this._treeBuf = []);
     let n = 0;
+    const R = 88, R2 = R * R;
+    const edge = this.treeEdge;
+    const W = CONFIG.WORLD_W;
     for (let wy = y0; wy < y1; wy++) {
       for (let wx = x0; wx < x1; wx++) {
         if (World.tileAt(wx, wy) !== TILE_TYPE.FOREST) continue;
+        const pdx = wx * T + T / 2 - pxp;
+        const pdy = wy * T + T - pyp;
+        const d2 = pdx * pdx + pdy * pdy;
+        // 惊鸟对林内树也生效，所以判定放在跳过之前
+        if (d2 < 34 * 34) Ambience.tryScare(wx, wy, pdx, time);
+        if (!edge[wy * W + wx]) continue;
+
         const size = (30 + this.hash(wx, wy) * 12) | 0;   // 取整 = 预缩放的桶号，误差 <1px
         const cxp = wx * T + T / 2 - this.camX;
         const byp = wy * T + T - this.camY;
 
         // 风：缓慢的全局摆动（每棵树相位不同）
-        const wind = Math.sin(time / 750 + wx * 0.04 + wy * 0.02) * 1.6;
+        let bend = Math.sin(time / 750 + wx * 0.04 + wy * 0.02) * 1.6;
         // 人物推移：越近弯得越厉害，方向 = 远离人物
-        const pdx = wx * T + T / 2 - pxp;
-        const pdy = wy * T + T - pyp;
-        const d = Math.sqrt(pdx * pdx + pdy * pdy);   // hypot 慢得多
-        const R = 88;
-        let bend = wind;
-        if (d < R) bend += -(pdx / (d || 1)) * (1 - d / R) * 8;
-        // 靠得太近：惊飞一群鸟（模块内部有冷却）
-        if (d < 34) Ambience.tryScare(wx, wy, pdx, time);
+        if (d2 < R2) {
+          const d = Math.sqrt(d2);   // hypot 慢得多
+          bend += -(pdx / (d || 1)) * (1 - d / R) * 8;
+        }
 
         buf[n++] = cxp; buf[n++] = byp; buf[n++] = size; buf[n++] = bend / size;
       }
