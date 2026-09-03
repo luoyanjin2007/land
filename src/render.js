@@ -12,7 +12,13 @@ const Render = {
   miniCanvas: null,
   sprites: {},                 // 贴图缓存 name -> Image
   chunkCache: new Map(),       // 地形 chunk 缓存 "cx,cy" -> canvas
+  tuftCache: new Map(),        // 草丛层缓存 "cx,cy" -> canvas | null（该块无草）
   maskCache: new Map(),        // 水格形状缓存 "cx,cy" -> canvas
+
+  // 人物周围「洞」的半径（格）。洞内的草不贴静态层，改为逐帧重画以实现摆动。
+  // 必须大于互动半径 56px：人物贴着格子边缘时距洞口 2×32=64px > 56px，
+  // 保证弯曲量在洞口已衰减到 0，洞里洞外接得上。
+  TUFT_HOLE_T: 2,
 
   // chunk 四周留白：烤进 chunk 的东西会探出所属格子——树冠最高 41px 且锚点上移
   // 2px，探出格顶 11px；宝塔 42×46 探出格顶 16px、左右各 5px。不留白就会被 chunk
@@ -184,12 +190,17 @@ const Render = {
 
   key(cx, cy) { return cx + ',' + cy; },
 
-  // 淘汰离当前镜头太远的缓存，控制内存
-  evictFar(map, ccx, ccy, keep = 5) {
-    if (map.size <= 60) return;
-    for (const k of map.keys()) {
-      const [cx, cy] = k.split(',').map(Number);
-      if (Math.abs(cx - ccx) > keep || Math.abs(cy - ccy) > keep) map.delete(k);
+  // 淘汰离镜头太远的缓存。基准是镜头中心所在的 chunk，而不是刚创建的那一块——
+  // 后者在屏幕边缘创建时会把另一侧仍在屏内的 chunk 判为「远」，删掉又立刻重建，
+  // 每次重建都是一整块 16×16 格的重新绘制，走路时就会一顿一顿。
+  // keep=3 留 7×7=49 块，满屏最多用到 4×5，余量够。
+  evictFar(ccx, ccy, keep = 3) {
+    for (const map of [this.chunkCache, this.tuftCache, this.maskCache]) {
+      if (map.size <= 30) continue;
+      for (const k of map.keys()) {
+        const [cx, cy] = k.split(',').map(Number);
+        if (Math.abs(cx - ccx) > keep || Math.abs(cy - ccy) > keep) map.delete(k);
+      }
     }
   },
 
@@ -212,7 +223,6 @@ const Render = {
         this.drawPropsInto(g, wx, wy, sx, sy);
       }
     }
-    this.evictFar(this.chunkCache, cx, cy);
     this.chunkCache.set(k, c);
     return c;
   },
@@ -234,7 +244,6 @@ const Render = {
         }
       }
     }
-    this.evictFar(this.maskCache, cx, cy);
     this.maskCache.set(k, c);
     return c;
   },
@@ -243,11 +252,11 @@ const Render = {
 
   // 性能面板（P 键开关）：各图层耗时用指数滑动平均，否则数字跳得看不清。
   // 存在的意义是别再靠"调用次数推算"猜瓶颈——线上读数字才算证据。
-  BUILD: 26,
+  BUILD: 27,
   perf: {
     on: false, bare: false, off: {},
     frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0,
-    nChunk: 0, last: 0, gap: 0,
+    nChunk: 0, nTuft: 0, last: 0, gap: 0,
   },
 
   // a 是上一帧均值，b 是本帧实测；0.1 的权重约等于看最近 10 帧
@@ -279,8 +288,8 @@ const Render = {
     if (P.bare) {
       if (P.on) {
         P.frame = this.ema(P.frame, performance.now() - t0);
-        P.chunk = P.water = P.trees = P.other = 0;
-        P.nChunk = 0;
+        P.chunk = P.tuft = P.water = P.trees = P.other = 0;
+        P.nChunk = P.nTuft = 0;
         this.drawPerf();
       }
       return;
@@ -310,6 +319,33 @@ const Render = {
       }
     }
     P.nChunk = nc;
+    this.evictFar(Math.floor((this.camX + canvas.width / 2) / S),
+                  Math.floor((this.camY + canvas.height / 2) / S));
+
+    // 草丛：静态层整块贴，但在人物周围按格挖一个洞，洞内的草改为逐帧重画，
+    // 于是只有人物身边的草会摆动、会被拨开。洞口与格线重合、草丛横向偏移
+    // 又被夹在格内，所以挖得干净，不会切到邻格静态草的边。
+    // 每帧调用数：约 16 次整块贴图 + 洞内十来丛，而不是满屏 570 丛。
+    const tTuft = P.on ? performance.now() : 0;
+    if (!P.off[3]) {
+      const T0 = CONFIG.TILE, HR = this.TUFT_HOLE_T;
+      const ptx = Math.floor(Player.x / T0), pty = Math.floor(Player.y / T0);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, canvas.width, canvas.height);
+      ctx.rect((ptx - HR) * T0 - this.camX, (pty - HR) * T0 - this.camY,
+               (HR * 2 + 1) * T0, (HR * 2 + 1) * T0);
+      ctx.clip('evenodd');
+      for (let cy = cy0; cy <= cy1; cy++) {
+        for (let cx = cx0; cx <= cx1; cx++) {
+          if (cx * CONFIG.CHUNK_TILES >= CONFIG.WORLD_W || cy * CONFIG.CHUNK_TILES >= CONFIG.WORLD_H) continue;
+          const tl = this.getTuftLayer(cx, cy);
+          if (tl) ctx.drawImage(tl, cx * S - this.camX, cy * S - this.camY);
+        }
+      }
+      ctx.restore();
+      this.drawNearTufts(time);
+    }
 
     // 动态层：水面特效（云影 + 水面涟漪）、雨珠溅落
     const tWater = P.on ? performance.now() : 0;
@@ -347,7 +383,7 @@ const Render = {
       ctx.fill();
     }
 
-    // 草丛已全部烤进 chunk（见 tuftInto），这里只剩惊鸟判定
+    // 草丛在上面画完了（静态层 + 人物周围的动态那一小圈），这里只剩惊鸟判定
     const tTrees = P.on ? performance.now() : 0;
     this.scareBirds(time);
     const tRest = P.on ? performance.now() : 0;
@@ -388,7 +424,8 @@ const Render = {
 
     if (P.on) {
       const end = performance.now();
-      P.chunk = this.ema(P.chunk, tWater - tChunk);
+      P.chunk = this.ema(P.chunk, tTuft - tChunk);
+      P.tuft = this.ema(P.tuft, tWater - tTuft);
       P.water = this.ema(P.water, tTrees - tWater);
       P.trees = this.ema(P.trees, tRest - tTrees);
       P.other = this.ema(P.other, (end - t0) - (tRest - tChunk));
@@ -414,6 +451,7 @@ const Render = {
       `─────────────`,
       `1 chunk ${sw(1)} ${f(P.chunk)} ×${P.nChunk}`,
       `2 水面   ${sw(2)} ${f(P.water)}`,
+      `3 草丛   ${sw(3)} ${f(P.tuft)} ×${P.nTuft}`,
       `4 氛围雨 ${sw(4)}`,
       `5 夜色   ${sw(5)}`,
       `惊鸟 ${f(P.trees)}   其余 ${f(P.other)}`,
@@ -530,33 +568,101 @@ const Render = {
     else if (t === TILE_TYPE.FOUNTAIN) {
       this.blitOn(g, 'fountain', cx, by - 2, 40, 40);
     }
-    // 草丛全部烤进 chunk。原先每丛草每帧都要一次 setTransform + drawImage 做风摆，
-    // 密草区 570 丛就是 570 次带剪切变换的调用，GPU 无法批处理——实测关掉这一层
-    // 帧率立刻从 47fps 回到上限 62fps，是当时唯一的瓶颈。
-    // 代价：草不再随风摆动，也不再被人物拨开。
-    else if (t === TILE_TYPE.GRASS) {
+    // 紧贴森林北侧的草丛例外，烤进 chunk：草丛层整层贴在所有 chunk 之后，
+    // 而南边的树冠会探进这格 11px——放在草丛层里会压在树冠上面。烤进 chunk
+    // 则由逐行绘制顺序保证树后画。代价是这一圈草不摆、也不被人物拨开。
+    else if (t === TILE_TYPE.GRASS && World.tileAt(wx, wy + 1) === TILE_TYPE.FOREST) {
       this.tuftInto(g, wx, wy, sx, sy);
     }
   },
 
-  // 草丛，烤进 chunk。45% 的草格长草，高度/变体/横向偏移都由坐标哈希决定，
-  // 所以同一个世界种子长出的草永远在同一处。
-  tuftInto(g, wx, wy, sx, sy) {
+  // 草丛的确定性摆放：给定格子返回预缩放贴图和格内偏移，这格没草则返回 null。
+  // 静态草丛层和人物周围逐帧重画的草共用这一个函数，保证两者摆放逐像素一致——
+  // 否则草进出「洞」的时候会跳位。
+  tuftAt(wx, wy) {
     const gv = this._grassVariants || (this._grassVariants = []);
     if (!gv.length) for (let i = 0; i < 4; i++) gv.push(this.sprites['grass-' + i]);
     for (let i = 0; i < 4; i++) {
-      if (!gv[i] || !gv[i].complete || !gv[i].naturalWidth) return;
+      if (!gv[i] || !gv[i].complete || !gv[i].naturalWidth) return null;
     }
     // 独立 hash：若沿用 hash(wx, wy) 会与地面贴图变体 floor(hash*5) 完全相关，
     // 草丛就只长在变体格上，看着像草丛自带一块异色地面
     const hv = this.hash(wx * 7 + 13, wy * 7 + 31);
-    if (hv < 0.55) return;                // 45% 的草格长草
+    if (hv < 0.55) return null;           // 45% 的草格长草
     const t01 = (hv - 0.55) / 0.45;       // 归一到 0~1：hv 被门控截断在高段，直接用会偏大
     const vi = Math.floor(this.hash(wx * 3 + 5, wy * 3 + 9) * 4);
     const gh = (15 + t01 * 9) | 0;        // 15~24px，约半格到 3/4 格；取整 = 预缩放桶号
     const tufts = this._tufts || (this._tufts = []);
     const s = tufts[vi * 32 + gh] || this.tuftSprite(vi, gh);
-    g.drawImage(s, sx + 6 + t01 * 20 - s.width / 2, sy + 28 - gh);
+    // 横向偏移夹在格子内。草丛原本可以横跨格线，但人物周围那个洞是按格挖的，
+    // 跨线的草会被洞口切掉一条边；夹住之后洞口与格线重合，挖得干净。
+    // 竖向天然在格内（顶 = 格顶 + 28 - gh，gh 最大 24）。
+    const T = CONFIG.TILE;
+    const ox = Math.max(0, Math.min(T - s.width, Math.round(6 + t01 * 20 - s.width / 2)));
+    return { s, ox, gh };
+  },
+
+  tuftInto(g, wx, wy, sx, sy) {
+    const t = this.tuftAt(wx, wy);
+    if (t) g.drawImage(t.s, sx + t.ox, sy + 28 - t.gh);
+  },
+
+  // 草丛层：整个 chunk 的草预渲染成一张透明画布，每帧只需一次 drawImage。
+  // 和地形分开是为了能在人物周围「挖洞」——洞内的草改为逐帧重画，才能摆动。
+  // 这一格若紧贴森林北侧则跳过（已烤进 chunk，见 drawPropsInto 的注释）。
+  // 整块没草就存 null，省一张 1MB 的空画布。
+  getTuftLayer(cx, cy) {
+    const k = this.key(cx, cy);
+    if (this.tuftCache.has(k)) return this.tuftCache.get(k);
+    const T = CONFIG.TILE;
+    let c = null, g = null;
+    for (let y = 0; y < CONFIG.CHUNK_TILES; y++) {
+      for (let x = 0; x < CONFIG.CHUNK_TILES; x++) {
+        const wx = cx * CONFIG.CHUNK_TILES + x, wy = cy * CONFIG.CHUNK_TILES + y;
+        if (!World.inBounds(wx, wy)) continue;
+        if (World.tileAt(wx, wy) !== TILE_TYPE.GRASS) continue;
+        if (World.tileAt(wx, wy + 1) === TILE_TYPE.FOREST) continue;
+        const t = this.tuftAt(wx, wy);
+        if (!t) continue;
+        if (!c) {
+          c = document.createElement('canvas');
+          c.width = c.height = CONFIG.CHUNK_PX;
+          g = c.getContext('2d');
+        }
+        g.drawImage(t.s, x * T + t.ox, y * T + 28 - t.gh);
+      }
+    }
+    this.tuftCache.set(k, c);
+    return c;
+  },
+
+  // 人物周围那个洞里的草：逐帧重画，带风摆和被人物拨开的弯曲。
+  // 弯曲量在互动半径边缘衰减到 0，而洞比互动半径大——所以洞口那一圈草画出来
+  // 与静态版逐像素相同，草进出洞口不会突然抖一下。
+  drawNearTufts(time) {
+    const { ctx } = this;
+    const T = CONFIG.TILE, R = this.TUFT_HOLE_T, PR = 56;
+    const ptx = Math.floor(Player.x / T), pty = Math.floor(Player.y / T);
+    let n = 0;
+    for (let wy = pty - R; wy <= pty + R; wy++) {
+      for (let wx = ptx - R; wx <= ptx + R; wx++) {
+        if (!World.inBounds(wx, wy)) continue;
+        if (World.tileAt(wx, wy) !== TILE_TYPE.GRASS) continue;
+        if (World.tileAt(wx, wy + 1) === TILE_TYPE.FOREST) continue;
+        const t = this.tuftAt(wx, wy);
+        if (!t) continue;
+        const pdx = wx * T + T / 2 - Player.x, pdy = wy * T + T - Player.y;
+        const d = Math.sqrt(pdx * pdx + pdy * pdy);
+        const fade = d >= PR ? 0 : 1 - d / PR;
+        const wind = Math.sin(time / 420 + wx * 0.09 + wy * 0.05) * 3;
+        const bend = (wind - (pdx / (d || 1)) * 5) * fade;
+        ctx.setTransform(1, 0, bend / t.gh, 1, wx * T + t.ox - this.camX, wy * T + 28 - this.camY);
+        ctx.drawImage(t.s, 0, -t.gh);
+        n++;
+      }
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.perf.nTuft = n;
   },
 
   // 惊鸟：人物贴近树时惊飞一群鸟。树已全部烤进 chunk，不用再扫视口，
