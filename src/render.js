@@ -259,8 +259,12 @@ const Render = {
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       // 窗户亮灯（夜晚才开灯，窗口位置固定在房屋上部）
       if (night > 0.15) {
-        for (let wy = cy0; wy <= cy1; wy++) {
-          for (let wx = cx0; wx <= cx1; wx++) {
+        const tx0 = Math.max(0, Math.floor(this.camX / CONFIG.TILE));
+        const ty0 = Math.max(0, Math.floor(this.camY / CONFIG.TILE));
+        const tx1 = Math.min(CONFIG.WORLD_W - 1, Math.ceil((this.camX + canvas.width) / CONFIG.TILE));
+        const ty1 = Math.min(CONFIG.WORLD_H - 1, Math.ceil((this.camY + canvas.height) / CONFIG.TILE));
+        for (let wy = ty0; wy <= ty1; wy++) {
+          for (let wx = tx0; wx <= tx1; wx++) {
             if (World.tileAt(wx, wy) !== TILE_TYPE.HOUSE) continue;
             const hv = this.hash(wx, wy);
             if (hv < 0.2) continue;   // 少数黑灯的屋子

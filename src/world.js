@@ -298,6 +298,9 @@ const World = {
     // 城际道路（穿过城郊缓冲和野外，连接各城城门）
     if (this.roadTiles.has(rkey)) return TILE_TYPE.PATH;
 
+    // 风景湖（湖面渲染成水；路上的湖格已被上面 road 分支接管 = 木桥）
+    if (this.inLakeRaw(x, y)) return TILE_TYPE.WATER;
+
     // 城郊缓冲（12 格开阔平地，让城市坐落在平原上）
     const c = this.cityCovering(x, y);
     if (c) return TILE_TYPE.GRASS;
