@@ -86,8 +86,8 @@ const Render = {
         this.perf.bare = !this.perf.bare;
         this.perf.last = 0;
       }
-      // 1~5 分层开关：关掉某层看帧间隔怎么动，比猜哪层贵可靠
-      if (e.key >= '1' && e.key <= '5') {
+      // 1~5 分层开关：只在性能面板打开时生效；面板关着时 1~4 是魂技快捷键
+      if (e.key >= '1' && e.key <= '5' && this.perf.on) {
         this.perf.off[e.key] = !this.perf.off[e.key];
         this.perf.last = 0;
       }
@@ -268,7 +268,7 @@ const Render = {
 
   // 性能面板（P 键开关）：各图层耗时用指数滑动平均，否则数字跳得看不清。
   // 存在的意义是别再靠"调用次数推算"猜瓶颈——线上读数字才算证据。
-  BUILD: 30,
+  BUILD: 31,
   perf: {
     on: false, bare: false, off: {},
     frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0,
@@ -404,8 +404,12 @@ const Render = {
     this.scareBirds(time);
     const tRest = P.on ? performance.now() : 0;
 
-    // 人物
+    // 战斗层：地面魂技区域 → 魂兽（y 在玩家之前的）→ 人物 → 魂兽（之后）→ 魂技特效
+    Combat.drawGround();
+    Entities.drawLayer(time, false);
     this.drawPlayer(time);
+    Entities.drawLayer(time, true);
+    Combat.drawFx();
 
     // 雨丝
     if (!P.off[4]) Effects.drawRain();
@@ -709,6 +713,8 @@ const Render = {
 
   drawPlayer(time) {
     const { ctx } = this;
+    // 复活保护期闪烁（整个人时隐时现）
+    if (Player.soul && Player.invuln > 0 && Math.floor(time / 100) % 2 === 0) return;
     const swimming = Player.inWater;
     let cands;          // 候选贴图，从前往后取第一张已就绪的（动作图懒加载）
     let flip = false;
@@ -868,6 +874,106 @@ const Render = {
       `${move}  M 世界地图`,
       180, 24
     );
+
+    // 觉醒之后才有战斗 HUD
+    if (Player.soul) {
+      this.drawBars();
+      this.drawSkillBar();
+    }
+  },
+
+  // 左上小地图下方：等级/武魂/魂环 + 生命条 + 魂力条 + 经验条
+  drawBars() {
+    const { ctx } = this;
+    const x = 12;
+    const soul = SOULS[Player.soul];
+    ctx.textAlign = 'left';
+    ctx.font = '12px "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = '#ffe9a8';
+    ctx.fillText(`Lv.${Player.level} ${soul.name}   魂环 ×${Player.rings}`, x, 176);
+    this.statBar(x, 182, 204, 11, Player.hp / Player.maxHp, '#5a1d1d', '#e04b3b',
+                 `${Math.ceil(Player.hp)}/${Player.maxHp}`);
+    this.statBar(x, 197, 204, 11, Player.mp / Player.maxMp, '#1d3f78', '#3f7fe0',
+                 `${Math.floor(Player.mp)}/${Player.maxMp}`);
+    this.statBar(x, 212, 204, 5, Player.exp / Combat.expNeed(Player.level), '#3a3320', '#e0b73f', '');
+  },
+
+  statBar(x, y, w, h, frac, bg, fg, text) {
+    const { ctx } = this;
+    frac = Math.max(0, Math.min(1, frac));
+    ctx.fillStyle = bg;
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = fg;
+    ctx.fillRect(x, y, w * frac, h);
+    ctx.strokeStyle = 'rgba(0,0,0,.55)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    if (text) {
+      ctx.font = '10px "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(255,255,255,.92)';
+      ctx.fillText(text, x + w / 2, y + h - 2);
+      ctx.textAlign = 'left';
+    }
+  },
+
+  // 屏幕底部中央：四个魂技格（冷却扫过、魂力不足变暗、未解锁加锁）
+  drawSkillBar() {
+    const { ctx, canvas } = this;
+    const soul = SOULS[Player.soul];
+    const W = 56, H = 56, G = 8;
+    const total = 4 * W + 3 * G;
+    let x = (canvas.width - total) / 2;
+    const y = canvas.height - H - 12;
+
+    for (let i = 0; i < 4; i++) {
+      const sk = soul.skills[i];
+      const needLv = Combat.SKILL_UNLOCK[i];
+      const locked = Player.level < needLv;
+      const cd = Combat.cds[i];
+      const noMp = Player.mp < sk.cost;
+      const rgb = soul.color;
+
+      ctx.fillStyle = 'rgba(8,14,24,.72)';
+      ctx.fillRect(x, y, W, H);
+      ctx.strokeStyle = locked ? '#566' : `rgba(${rgb},.9)`;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x + 1, y + 1, W - 2, H - 2);
+
+      // 快捷键标号
+      ctx.fillStyle = locked ? '#788' : '#ffe9a8';
+      ctx.font = 'bold 11px Consolas, monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(String(i + 1), x + 4, y + 12);
+
+      if (locked) {
+        ctx.fillStyle = '#aab';
+        ctx.font = '15px "Microsoft YaHei", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('🔒', x + W / 2, y + 26);
+        ctx.font = '10px "Microsoft YaHei", sans-serif';
+        ctx.fillStyle = '#89a';
+        ctx.fillText(`Lv.${needLv}`, x + W / 2, y + 44);
+      } else {
+        ctx.font = '12px "Microsoft YaHei", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = noMp && cd <= 0 ? '#7c93b8' : 'rgba(255,255,255,.92)';
+        ctx.fillText(sk.name, x + W / 2, y + 26);
+        ctx.font = '10px "Microsoft YaHei", sans-serif';
+        ctx.fillStyle = noMp ? '#e07060' : '#8fc0ff';
+        ctx.fillText(`◆${sk.cost}`, x + W / 2, y + 46);
+
+        if (cd > 0) {
+          const f = cd / sk.cd;
+          ctx.fillStyle = 'rgba(0,0,0,.62)';
+          ctx.fillRect(x, y, W, H * f);
+          ctx.fillStyle = '#fff';
+          ctx.font = 'bold 15px Consolas, monospace';
+          ctx.fillText(cd.toFixed(1), x + W / 2, y + 32);
+        }
+      }
+      x += W + G;
+    }
   },
 
   shade(hex, amt) {

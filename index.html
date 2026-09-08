@@ -35,6 +35,37 @@
     cursor: pointer; letter-spacing: 6px; transition: all .2s;
   }
   #title button:hover { background: #7ec850; color: #14320a; border-color: #7ec850; }
+
+  /* 武魂觉醒选择 */
+  #awaken {
+    position: fixed; inset: 0; z-index: 19;
+    display: none;
+    background: rgba(6, 12, 24, .94);
+    align-items: center; justify-content: center; flex-direction: column;
+    gap: 22px;
+  }
+  #awaken.show { display: flex; }
+  #awaken h2 { color: #ffe9a8; font-size: 34px; letter-spacing: 14px; }
+  #awaken > p { color: #c8d2e0; font-size: 14px; letter-spacing: 2px; }
+  .soul-cards { display: flex; gap: 28px; flex-wrap: wrap; justify-content: center; }
+  .soul-card {
+    width: 300px; padding: 22px 24px; text-align: left;
+    border-radius: 14px; border: 2px solid; cursor: pointer;
+    background: rgba(18, 28, 22, .72); color: #e8ecf2;
+    font-family: inherit; transition: transform .15s, box-shadow .15s;
+  }
+  .soul-card[data-soul="hammer"] { border-color: #ffb347; }
+  .soul-card[data-soul="grass"] { border-color: #7ec850; }
+  .soul-card:hover { transform: translateY(-5px); box-shadow: 0 8px 30px rgba(0,0,0,.5); }
+  .soul-card[data-soul="hammer"]:hover { background: rgba(90, 56, 18, .65); }
+  .soul-card[data-soul="grass"]:hover { background: rgba(36, 70, 30, .65); }
+  .soul-card h3 { font-size: 24px; letter-spacing: 6px; margin-bottom: 2px; }
+  .soul-card[data-soul="hammer"] h3 { color: #ffc977; }
+  .soul-card[data-soul="grass"] h3 { color: #a6e07a; }
+  .soul-card .tag { font-size: 13px; color: #9fb0c4; letter-spacing: 3px; margin-bottom: 12px; }
+  .soul-card ul { list-style: none; font-size: 13px; line-height: 1.95; color: #d5dde8; }
+  .soul-card .sk { color: #ffe9a8; }
+  .soul-card .base { margin-top: 12px; font-size: 12px; color: #8fa0b6; }
 </style>
 </head>
 <body>
@@ -46,15 +77,50 @@
     <button id="start-btn">开 始 探 索</button>
   </div>
 
+  <!-- 武魂觉醒：开始探索后二选一 -->
+  <div id="awaken">
+    <h2>觉 醒 武 魂</h2>
+    <p>武魂殿的觉醒仪式上，沉睡的武魂苏醒了。选择你的武魂。</p>
+    <div class="soul-cards">
+      <button class="soul-card" data-soul="hammer">
+        <h3>昊天锤</h3>
+        <div class="tag">爆发 · 近战</div>
+        <ul>
+          <li><span class="sk">普攻</span> 近身锤击，伤害高、射程 46</li>
+          <li><span class="sk">1 崩地锤</span> 前方扇形重击 + 击退</li>
+          <li><span class="sk">2 铁血护体</span> 4s 减伤 60%</li>
+          <li><span class="sk">3 昊天震</span> 周身震环，群体击退</li>
+          <li><span class="sk">4 霸绝</span> 单体落锤，巨伤</li>
+        </ul>
+        <div class="base">生命 120 · 魂力 80 · 血厚手短，贴脸一套带走</div>
+      </button>
+      <button class="soul-card" data-soul="grass">
+        <h3>蓝银草</h3>
+        <div class="tag">控制 · 远程</div>
+        <ul>
+          <li><span class="sk">普攻</span> 远程藤击，射程 170，可风筝</li>
+          <li><span class="sk">1 缠绕</span> 定身单体 1.5s</li>
+          <li><span class="sk">2 蓝银牢</span> 区域减速 + 持续伤害</li>
+          <li><span class="sk">3 藤鞭</span> 直线穿透，抽一条线</li>
+          <li><span class="sk">4 蓝银皇域</span> 群体定身 + 击退</li>
+        </ul>
+        <div class="base">生命 90 · 魂力 120 · 血薄蓝长，站在射程圈外白打</div>
+      </button>
+    </div>
+  </div>
+
   <!-- 按依赖顺序加载，后面的文件能用前面的（普通脚本，双击 index.html 即可运行） -->
-  <script src="src/config.js?v=30"></script>
-  <script src="src/world.js?v=30"></script>
-  <script src="src/input.js?v=30"></script>
-  <script src="src/player.js?v=30"></script>
-  <script src="src/render.js?v=30"></script>
-  <script src="src/worldmap.js?v=30"></script>
-  <script src="src/ambience.js?v=30"></script>
-  <script src="src/effects.js?v=30"></script>
-  <script src="src/main.js?v=30"></script>
+  <script src="src/config.js?v=31"></script>
+  <script src="src/world.js?v=31"></script>
+  <script src="src/input.js?v=31"></script>
+  <script src="src/player.js?v=31"></script>
+  <script src="src/souls.js?v=31"></script>
+  <script src="src/entities.js?v=31"></script>
+  <script src="src/combat.js?v=31"></script>
+  <script src="src/render.js?v=31"></script>
+  <script src="src/worldmap.js?v=31"></script>
+  <script src="src/ambience.js?v=31"></script>
+  <script src="src/effects.js?v=31"></script>
+  <script src="src/main.js?v=31"></script>
 </body>
 </html>

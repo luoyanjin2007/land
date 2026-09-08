@@ -5,6 +5,15 @@ const Player = {
   moving: false,   // 是否在移动（渲染动画用）
   facing: 'down',  // 朝向：up / down / left / right
 
+  // 养成数值：awaken() 选定武魂时按武魂初始化
+  soul: null,          // 'hammer' 昊天锤 / 'grass' 蓝银草
+  level: 1, exp: 0,    // 等级与经验
+  rings: 0,            // 魂环数（= 已解锁魂技数）
+  hp: 0, maxHp: 0,
+  mp: 0, maxMp: 0, mpRegen: 4,   // 魂力：共享池，随时间回复
+  invuln: 0,           // 免伤计时（复活后的保护）
+  respawnX: 0, respawnY: 0,
+
   init() {
     // 出生点格子 → 像素坐标（格子中心）；不可行走时螺旋外扩找最近可走格
     let sx = World.spawn.x, sy = World.spawn.y;
@@ -24,6 +33,30 @@ const Player = {
     }
     this.x = (sx + 0.5) * CONFIG.TILE;
     this.y = (sy + 0.5) * CONFIG.TILE;
+    this.respawnX = this.x;
+    this.respawnY = this.y;
+  },
+
+  // 觉醒：武魂选择界面确认后调用，按武魂定初始数值并清战斗状态
+  awaken(soulId) {
+    this.soul = soulId;
+    const s = SOULS[soulId];
+    this.level = 1; this.exp = 0;
+    this.rings = Combat.SKILL_UNLOCK.filter(lv => this.level >= lv).length;
+    this.maxHp = s.baseHp; this.hp = s.baseHp;
+    this.maxMp = s.baseMp; this.mp = s.baseMp;
+    this.mpRegen = 4;
+    this.invuln = 1.2;
+    Combat.reset();
+  },
+
+  // 复活回出生点（圣魂村喷泉），回满魂力、留 2.5s 免伤
+  respawn() {
+    this.x = this.respawnX;
+    this.y = this.respawnY;
+    this.hp = Math.round(this.maxHp * 0.6);
+    this.mp = this.maxMp;
+    this.invuln = 2.5;
   },
 
   // 每帧更新：dt 是距上帧的秒数

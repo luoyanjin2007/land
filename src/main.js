@@ -11,12 +11,21 @@
   Effects.init();
   WorldMap.init();
   Ambience.init();
+  Entities.init();
+  Combat.init();
 
-  // 3. 开场画面：点击「开始探索」才接管操作
+  // 3. 开场画面：点击「开始探索」→ 武魂觉醒选择 → 选定后才接管操作
   let started = false;
   document.getElementById('start-btn').addEventListener('click', () => {
     document.getElementById('title').classList.add('hidden');
-    started = true;
+    document.getElementById('awaken').classList.add('show');
+  });
+  document.querySelectorAll('.soul-card').forEach(card => {
+    card.addEventListener('click', () => {
+      Player.awaken(card.dataset.soul);
+      document.getElementById('awaken').classList.remove('show');
+      started = true;
+    });
   });
 
   // 4. 游戏循环：requestAnimationFrame 驱动，dt 控制帧率无关的速度
@@ -24,12 +33,17 @@
   function loop(now) {
     const dt = Math.min(0.05, (now - last) / 1000); // 上限 50ms 防止切标签页后暴走
     last = now;
-    if (started) Player.update(dt);
+    if (started) {
+      Player.update(dt);
+      Entities.update(dt, now);
+      Combat.update(dt, now);
+    }
     WorldMap.reveal(Player.x, Player.y);
     Effects.update(dt, now);
     Ambience.update(dt, now);
     Render.updateCamera(dt);
     Render.draw(now);
+    Input.endFrame();
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
