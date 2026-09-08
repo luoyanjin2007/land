@@ -124,12 +124,28 @@ const Render = {
     }
   },
 
-  // 所有贴图就绪后才允许渲染（否则会把残缺画面烤进 chunk 缓存）
+  // 所有贴图都在 init 里同时开始下载，但首屏只等两类：
+  //   1. 会被烤进 chunk 缓存的（地面、建筑、树、草丛）——残缺的贴图一旦进了
+  //      缓存就会一直错到那块 chunk 被淘汰，必须等齐
+  //   2. 人物朝下的站立帧——开局第一眼就要有人
+  // 剩下 27 张人物动作图共 328KB 从不进缓存，缺帧时 drawPlayer 会退到已就绪的
+  // 帧，所以不该挡着开局。首屏必须下完的量因此从 678KB 降到 350KB。
   spritesReady() {
     return this.SPRITE_LIST.every(n => {
+      if (n.startsWith('player-') && n !== 'player-down-0') return true;
       const img = this.sprites[n];
       return img && img.complete && img.naturalWidth > 0;
     });
+  },
+
+  // 取第一张已就绪的贴图。人物动作图是懒加载的，刚开局某个方向可能还差几百
+  // 毫秒，退到已到的帧比让人物凭空消失一瞬好。
+  pick(names) {
+    for (const n of names) {
+      const img = this.sprites[n];
+      if (img && img.complete && img.naturalWidth) return img;
+    }
+    return null;
   },
 
   resize() {
@@ -252,7 +268,7 @@ const Render = {
 
   // 性能面板（P 键开关）：各图层耗时用指数滑动平均，否则数字跳得看不清。
   // 存在的意义是别再靠"调用次数推算"猜瓶颈——线上读数字才算证据。
-  BUILD: 29,
+  BUILD: 30,
   perf: {
     on: false, bare: false, off: {},
     frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0,
@@ -694,27 +710,27 @@ const Render = {
   drawPlayer(time) {
     const { ctx } = this;
     const swimming = Player.inWater;
-    let name;
+    let cands;          // 候选贴图，从前往后取第一张已就绪的（动作图懒加载）
     let flip = false;
     if (swimming) {
       // 游泳贴图：水线已画进角色里，四方向齐全；移动循环划水帧，静止用漂浮帧
       const frame = Player.moving ? 1 + (Math.floor(time / 140) % 3) : 0;
       const dir = Player.facing;
-      if (dir === 'up') name = `player-swim-up-${frame}`;
-      else if (dir === 'down') name = `player-swim-down-${frame}`;
+      if (dir === 'up') cands = [`player-swim-up-${frame}`, 'player-swim-up-0'];
+      else if (dir === 'down') cands = [`player-swim-down-${frame}`, 'player-swim-down-0'];
       else {
-        name = `player-swim-${frame}`;   // 侧向条带默认朝右
+        cands = [`player-swim-${frame}`, 'player-swim-0'];   // 侧向条带默认朝右
         flip = dir === 'left';
       }
     } else if (!Player.moving) {
-      name = `player-${Player.facing}-0`;
+      cands = [`player-${Player.facing}-0`, 'player-down-0'];
     } else {
       const frame = 1 + (Math.floor(time / 130) % 3);
-      name = `player-${Player.facing}-${frame}`;
+      cands = [`player-${Player.facing}-${frame}`, `player-${Player.facing}-0`, 'player-down-0'];
     }
-    const img = this.sprites[name];
+    const img = this.pick(cands);
 
-    if (!img || !img.complete || !img.naturalWidth) return;
+    if (!img) return;
 
     if (swimming) {
       // 只画水线以上的部分（约 55%）：头和肩膀露出水面，下半身不可见。
