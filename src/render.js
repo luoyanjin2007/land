@@ -40,6 +40,7 @@ const Render = {
     [TILE_TYPE.FOUNTAIN]: '#9fc4d8',
     [TILE_TYPE.PATH]: '#c2a575',
     [TILE_TYPE.LAWN]: '#5d9e4a',
+    [TILE_TYPE.YARD]: '#a88b5a',      // 民居院子：土黄地面
     [TILE_TYPE.TEMPLE]: '#d4b88a',    // 武魂殿/神庙：金黄石
     [TILE_TYPE.PALACE]: '#c9a06a',    // 宫殿：深金
     [TILE_TYPE.COLLEGE]: '#8faac8',   // 学院：灰蓝石
@@ -67,6 +68,7 @@ const Render = {
     [TILE_TYPE.SAND]: ['tile-sand'],
     [TILE_TYPE.GRASS]: ['tile-grass-2'],
     [TILE_TYPE.LAWN]: ['tile-grass-2'],
+    [TILE_TYPE.YARD]: ['tile-dirt'],
     [TILE_TYPE.FOREST]: ['tile-forest'],
     [TILE_TYPE.ROAD]: ['tile-road'],
     [TILE_TYPE.PATH]: ['tile-dirt', 'tile-dirt', 'tile-gravel'],
@@ -324,7 +326,7 @@ const Render = {
 
   // 性能面板（P 键开关）：各图层耗时用指数滑动平均，否则数字跳得看不清。
   // 存在的意义是别再靠"调用次数推算"猜瓶颈——线上读数字才算证据。
-  BUILD: '32b',
+  BUILD: '33',
   perf: {
     on: false, bare: false, off: {},
     frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0,
@@ -393,6 +395,18 @@ const Render = {
     P.nChunk = nc;
     this.evictFar(Math.floor((this.camX + canvas.width / 2) / S),
                   Math.floor((this.camY + canvas.height / 2) / S));
+
+    // 房屋：不烤进 chunk（否则右半跨 chunk 的房屋会被邻块地面盖住），
+    // 每帧单独遍历可见格，在所有 chunk 贴完之后画。
+    // 先算可见格范围，再画房子——tx0/ty0 在下面才定义，这里提前算一份。
+    const hx0 = Math.max(0, Math.floor((this.camX) / CONFIG.TILE));
+    const hy0 = Math.max(0, Math.floor((this.camY) / CONFIG.TILE));
+    const hx1 = Math.min(CONFIG.WORLD_W - 1, Math.ceil((this.camX + canvas.width) / CONFIG.TILE));
+    const hy1 = Math.min(CONFIG.WORLD_H - 1, Math.ceil((this.camY + canvas.height) / CONFIG.TILE));
+    if (!P.off[1]) this.drawHouses(
+      Math.max(0, hx0 - 1), Math.max(0, hy0 - 1),
+      Math.min(CONFIG.WORLD_W - 1, hx1 + 1),
+      Math.min(CONFIG.WORLD_H - 1, hy1 + 1), time);
 
     // 草丛：静态层整块贴，但在人物周围按格挖一个洞，洞内的草改为逐帧重画，
     // 于是只有人物身边的草会摆动、会被拨开。洞口与格线重合、草丛横向偏移
@@ -620,6 +634,28 @@ const Render = {
     }
   },
 
+  // 房屋：单独绘制（不烤进 chunk，避免跨 chunk 被地面盖住）
+  drawHouses(x0, y0, x1, y1, time) {
+    for (let wy = y0; wy <= y1; wy++) {
+      for (let wx = x0; wx <= x1; wx++) {
+        if (World.tileAt(wx, wy) !== TILE_TYPE.HOUSE) continue;
+        // 2×2 房屋：只有左上角（北/西邻居都不是 HOUSE）才画
+        const northIsHouse = World.tileAt(wx, wy - 1) === TILE_TYPE.HOUSE;
+        const westIsHouse = World.tileAt(wx - 1, wy) === TILE_TYPE.HOUSE;
+        if (northIsHouse || westIsHouse) continue;
+        const sx = wx * CONFIG.TILE - this.camX;
+        const sy = wy * CONFIG.TILE - this.camY;
+        const cx = sx + CONFIG.TILE / 2;
+        const isBig = this.hash(wx, wy) > 0.78;
+        const bw = 56, bh = 64;
+        const bx = cx + CONFIG.TILE / 2;  // 两格正中间
+        const by2 = sy + CONFIG.TILE * 2; // 房块底边
+        this.shadowOn(this.ctx, bx, by2 - 4, 20);
+        this.buildHouse2x2(this.ctx, bx, by2, bw, bh, isBig);
+      }
+    }
+  },
+
   // 静态建筑与树木：画进 chunk
   drawPropsInto(g, wx, wy, sx, sy) {
     const t = World.tileAt(wx, wy);
@@ -630,12 +666,6 @@ const Render = {
       const size = (30 + this.hash(wx, wy) * 12) | 0;
       this.shadowOn(g, cx, by - 5, size * 0.3);
       this.blitOn(g, 'tree-2', cx, by - 2, Math.round(size * 0.8), size);
-    }
-    else if (t === TILE_TYPE.HOUSE) {
-      const isPagoda = this.hash(wx, wy) > 0.86;
-      this.shadowOn(g, cx, by - 2, 14);
-      if (isPagoda) this.blitOn(g, 'pagoda-2', cx, by - 2, 42, 46);
-      else this.blitOn(g, 'house-2', cx, by - 2, 42, 42);
     }
     else if (t === TILE_TYPE.FOUNTAIN) {
       this.blitOn(g, 'fountain', cx, by - 2, 40, 40);
@@ -848,6 +878,70 @@ const Render = {
     const img = this.sprites[name];
     if (img && img.complete && img.naturalWidth) {
       g.drawImage(img, cx - w / 2, bottom - h, w, h);
+    }
+  },
+
+  // 2×2 民居：土墙/砖墙 + 坡屋顶 + 门窗（大户型有烟囱+阁楼小窗）
+  buildHouse2x2(g, cx, by, W, H, big) {
+    const x0 = cx - W / 2, y0 = by - H;
+    // 台基
+    g.fillStyle = '#6a5538';
+    g.fillRect(x0 - 1, by - 4, W + 2, 4);
+    // 墙体（土黄）
+    g.fillStyle = '#c2743f';
+    g.fillRect(x0, y0 + H * 0.35, W, H * 0.58);
+    // 墙身暗部（左侧）
+    g.fillStyle = 'rgba(0,0,0,.12)';
+    g.fillRect(x0, y0 + H * 0.35, W * 0.35, H * 0.58);
+    // 墙纹（横线）
+    g.strokeStyle = 'rgba(0,0,0,.15)';
+    g.lineWidth = 1;
+    for (let i = 1; i < 4; i++) {
+      const yy = y0 + H * 0.35 + (H * 0.58) * i / 4;
+      g.beginPath(); g.moveTo(x0, yy); g.lineTo(x0 + W, yy); g.stroke();
+    }
+    // 坡屋顶
+    g.fillStyle = '#8b4513';
+    g.beginPath();
+    g.moveTo(x0 - 3, y0 + H * 0.38);
+    g.lineTo(cx, y0 + 2);
+    g.lineTo(x0 + W + 3, y0 + H * 0.38);
+    g.closePath();
+    g.fill();
+    // 屋脊
+    g.fillStyle = '#6b3410';
+    g.fillRect(cx - W * 0.3, y0 + 1, W * 0.6, 3);
+    // 屋檐阴影
+    g.fillStyle = 'rgba(0,0,0,.25)';
+    g.fillRect(x0 - 3, y0 + H * 0.36, W + 6, 3);
+    // 门（居中偏下）
+    g.fillStyle = '#4a2818';
+    const doorW = W * 0.2, doorH = H * 0.32;
+    g.fillRect(cx - doorW / 2, by - doorH - 4, doorW, doorH);
+    g.fillStyle = '#d4a040';
+    g.fillRect(cx + doorW * 0.25, by - doorH / 2 - 4, 1.5, 1.5);
+    // 窗户
+    g.fillStyle = '#3a5a78';
+    const winW = W * 0.18, winH = H * 0.16;
+    const winY = y0 + H * 0.45;
+    g.fillRect(x0 + W * 0.12, winY, winW, winH);
+    g.fillRect(x0 + W - W * 0.12 - winW, winY, winW, winH);
+    // 窗框
+    g.strokeStyle = '#2a3a48';
+    g.lineWidth = 0.8;
+    g.strokeRect(x0 + W * 0.12, winY, winW, winH);
+    g.strokeRect(x0 + W - W * 0.12 - winW, winY, winW, winH);
+    // 大户型：烟囱 + 阁楼小窗
+    if (big) {
+      g.fillStyle = '#8b4513';
+      g.fillRect(x0 + W * 0.7, y0 + 4, 5, H * 0.18);
+      g.fillStyle = '#6b3410';
+      g.fillRect(x0 + W * 0.7 - 1, y0 + 2, 7, 3);
+      // 阁楼窗
+      g.fillStyle = '#3a5a78';
+      g.fillRect(cx - 3, y0 + H * 0.25, 6, 5);
+      g.strokeStyle = '#2a3a48';
+      g.strokeRect(cx - 3, y0 + H * 0.25, 6, 5);
     }
   },
 
