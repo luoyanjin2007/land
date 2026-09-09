@@ -95,7 +95,7 @@ const Combat = {
     switch (sk.kind) {
       case 'cone': {
         // 朝最近目标（没有就朝面朝方向）扇形一击
-        const t = Entities.nearestAlive(px, py, sk.range * 1.15);
+        const t = Entities.nearestAlive(px, py, sk.range);
         const ang = t ? Math.atan2(t.y - py, t.x - px) : this.facingAngle();
         this.spend(i, sk);
         this.fxPush({ k: 'arc', x: px, y: py - 4, r: sk.range, a: ang, w: sk.arc,
@@ -161,20 +161,26 @@ const Combat = {
         break;
       }
       case 'line': {
-        const t = Entities.nearestAlive(px, py, sk.range * 1.15);
+        // 瞄准只在鞭子够得到的范围内锁怪——否则会朝 200 格外的怪空抽
+        const t = Entities.nearestAlive(px, py, sk.range);
         const ang = t ? Math.atan2(t.y - py, t.x - px) : this.facingAngle();
         const ex = px + Math.cos(ang) * sk.range, ey = py + Math.sin(ang) * sk.range;
         this.spend(i, sk);
-        this.fxPush({ k: 'bolt', x1: px, y1: py - 8, x2: ex, y2: ey,
-          t: 0, life: 0.18, w: 5, col: soul.color });
-        // 垂直距离 ≤ half width 且投影在线段内 = 被藤鞭抽到
+        this.fxPush({ k: 'whip', x1: px, y1: py - 8, x2: ex, y2: ey,
+          t: 0, life: 0.28, col: soul.color });
+        // 垂直距离 ≤ half width 且投影在线段内 = 被藤鞭扫中
         for (const m of Entities.monsters) {
           if (m.dead) continue;
           const dx = m.x - px, dy = m.y - py;
           const along = dx * Math.cos(ang) + dy * Math.sin(ang);
           if (along < 0 || along > sk.range) continue;
           const perp = Math.abs(-dx * Math.sin(ang) + dy * Math.cos(ang));
-          if (perp <= sk.width / 2 + m.r) this.hurt(m, sk.dmg);
+          if (perp <= sk.width / 2 + m.r) {
+            this.hurt(m, sk.dmg);
+            Entities.knock(m, Math.cos(ang) * 10, Math.sin(ang) * 10);
+            // 命中点爆一个小绿环，让「抽中了」读得出来（旧版特效和普攻完全一样）
+            this.fxPush({ k: 'ring', x: m.x, y: m.y, r0: 6, r1: 20, t: 0, life: 0.28, col: soul.color });
+          }
         }
         break;
       }
@@ -355,6 +361,26 @@ const Combat = {
         ctx.strokeStyle = `rgba(255,255,255,${a})`;
         ctx.lineWidth = f.w;
         ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      } else if (f.k === 'whip') {
+        // 藤鞭：抽出时先沿垂直方向甩出弧度再绷直，三层描边（深藤/亮藤/白芯）
+        const x1 = f.x1 - Render.camX, y1 = f.y1 - Render.camY;
+        let dx = f.x2 - f.x1, dy = f.y2 - f.y1;
+        const len = Math.hypot(dx, dy) || 1;
+        dx /= len; dy /= len;
+        const grow = Math.min(1, p / 0.35);          // 前 35% 时间抽出去
+        const gx = x1 + dx * len * grow, gy = y1 + dy * len * grow;
+        const swag = Math.sin(Math.min(1, p / 0.5) * Math.PI) * 16;
+        const cx = (x1 + gx) / 2 - dy * swag, cy = (y1 + gy) / 2 + dx * swag;
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = `rgba(${f.col},${0.3 * a})`;
+        ctx.lineWidth = 8;
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.quadraticCurveTo(cx, cy, gx, gy); ctx.stroke();
+        ctx.strokeStyle = `rgba(${f.col},${0.85 * a})`;
+        ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.quadraticCurveTo(cx, cy, gx, gy); ctx.stroke();
+        ctx.strokeStyle = `rgba(255,255,255,${0.9 * a})`;
+        ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.quadraticCurveTo(cx, cy, gx, gy); ctx.stroke();
       } else if (f.k === 'smite') {
         // 落地光柱 + 爆环
         const grad = ctx.createLinearGradient(sx0, sy0 - f.r * 2.4, sx0, sy0);

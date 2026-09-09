@@ -36,7 +36,7 @@ const SOULS = {
     skills: [
       { name: '缠绕', cost: 8,  cd: 5,  kind: 'root', range: 180, dmg: 6, dur: 1.5 },
       { name: '蓝银牢', cost: 15, cd: 10, kind: 'zone', range: 150, radius: 70, dur: 3, slow: 0.45, dps: 10 },
-      { name: '藤鞭', cost: 15, cd: 4,  kind: 'line', range: 200, width: 20, dmg: 22 },
+      { name: '藤鞭', cost: 15, cd: 4,  kind: 'line', range: 210, width: 30, dmg: 22 },
       { name: '蓝银皇域', cost: 60, cd: 30, kind: 'nova', range: 130, dmg: 30, root: 1.2, knock: 20 },
     ],
   },

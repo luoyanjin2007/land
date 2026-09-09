@@ -50,6 +50,7 @@ const Render = {
     'player-swim-0', 'player-swim-1', 'player-swim-2', 'player-swim-3',
     'player-swim-up-0', 'player-swim-up-1', 'player-swim-up-2', 'player-swim-up-3',
     'player-swim-down-0', 'player-swim-down-1', 'player-swim-down-2', 'player-swim-down-3',
+    'monster-boar', 'monster-wolf',
     'house-2', 'pagoda-2', 'fountain', 'tree-2',
     'tile-grass-2', 'tile-flower-overlay',
     'tile-road', 'tile-dirt', 'tile-gravel', 'tile-plaza', 'tile-sand', 'tile-water', 'tile-forest',
@@ -118,10 +119,51 @@ const Render = {
 
   loadSprites() {
     for (const name of this.SPRITE_LIST) {
-      const img = new Image();
-      img.src = `assets/sprites/${name}.png`;
-      this.sprites[name] = img;
+      // 怪物贴图用 JPEG（AI 生成的不带透明通道），加载后抠掉白底
+      if (name.startsWith('monster-')) {
+        const img = new Image();
+        img.onload = () => { this.sprites[name] = this.removeWhiteBg(img); };
+        img.src = `assets/sprites/${name}.jpg`;
+        this.sprites[name] = null;     // 加载中占位，drawMonster 会跳过
+      } else {
+        const img = new Image();
+        img.src = `assets/sprites/${name}.png`;
+        this.sprites[name] = img;
+      }
     }
+  },
+
+  // 白底 JPEG → 透明 canvas。四角取背景色，距离做 alpha 过渡。
+  // 只在贴图加载时跑一次，之后直接用透明 canvas 画，每帧零成本。
+  removeWhiteBg(img) {
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    const g = c.getContext('2d');
+    g.drawImage(img, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height);
+    const px = d.data;
+    const W = c.width, H = c.height;
+    // 背景色 = 四角平均
+    const corner = (cx, cy) => {
+      const i = (cy * W + cx) * 4;
+      return [px[i], px[i+1], px[i+2]];
+    };
+    const cs = [corner(8, 8), corner(W-9, 8), corner(8, H-9), corner(W-9, H-9)];
+    const br = cs.reduce((s, c) => s + c[0], 0) / 4;
+    const bg = cs.reduce((s, c) => s + c[1], 0) / 4;
+    const bb = cs.reduce((s, c) => s + c[2], 0) / 4;
+    for (let i = 0; i < px.length; i += 4) {
+      const dr = px[i] - br, dg = px[i+1] - bg, db = px[i+2] - bb;
+      const dist = Math.sqrt(dr*dr + dg*dg + db*db) / 255;
+      // 距离 0.07 以内 = 纯白背景（全透），0.07~0.22 线性过渡，之外不透明
+      let a = 1;
+      if (dist < 0.07) a = 0;
+      else if (dist < 0.22) a = (dist - 0.07) / 0.15;
+      px[i+3] = Math.round(a * 255);
+    }
+    g.putImageData(d, 0, 0);
+    return c;
   },
 
   // 所有贴图都在 init 里同时开始下载，但首屏只等两类：
@@ -132,7 +174,11 @@ const Render = {
   // 帧，所以不该挡着开局。首屏必须下完的量因此从 678KB 降到 350KB。
   spritesReady() {
     return this.SPRITE_LIST.every(n => {
+      // 人物动作图（懒加载，见 loadSprites 注释）不挡首屏
       if (n.startsWith('player-') && n !== 'player-down-0') return true;
+      // 怪物贴图：AI 生成的 JPEG，加载完还要抠白底。
+      // 从不进 chunk 缓存，觉醒前也用不到，首屏不用等。
+      if (n.startsWith('monster-')) return true;
       const img = this.sprites[n];
       return img && img.complete && img.naturalWidth > 0;
     });
@@ -268,7 +314,7 @@ const Render = {
 
   // 性能面板（P 键开关）：各图层耗时用指数滑动平均，否则数字跳得看不清。
   // 存在的意义是别再靠"调用次数推算"猜瓶颈——线上读数字才算证据。
-  BUILD: 31,
+  BUILD: '31b',
   perf: {
     on: false, bare: false, off: {},
     frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0,

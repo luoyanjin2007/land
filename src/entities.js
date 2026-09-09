@@ -221,71 +221,30 @@ const Entities = {
   drawMonster(m, time) {
     const { ctx } = Render;
     const T = MONSTER_TYPES[m.type];
-    const sx = m.x - Render.camX, sy = m.y - Render.camY;
     const r = T.r;
-    Render.shadow(sx, sy + 8, r * 0.95);
+    const sx = m.x - Render.camX, sy = m.y - Render.camY;
+    Render.shadow(sx, sy + 6, r * 1.2);
 
-    const bob = m.moving ? Math.sin(time / 90 + m.phase) * 1.6 : 0;
-    ctx.save();
-    ctx.translate(sx, sy + bob);
-    if (m.face < 0) ctx.scale(-1, 1);
-
-    // 身体
-    ctx.fillStyle = T.color;
-    ctx.beginPath();
-    ctx.ellipse(0, -6, r, r * 0.78, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(0,0,0,.28)';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    // 头（朝向移动方向）
-    const hx = r * 0.72, hy = -8;
-    ctx.fillStyle = T.color;
-    ctx.beginPath();
-    ctx.ellipse(hx, hy, r * 0.52, r * 0.46, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    if (m.type === 'wolf') {
-      // 三角耳 + 尾巴
-      ctx.fillStyle = T.color;
-      ctx.beginPath();
-      ctx.moveTo(hx - 6, hy - r * 0.4); ctx.lineTo(hx - 2, hy - r * 0.95); ctx.lineTo(hx + 2, hy - r * 0.4);
-      ctx.moveTo(hx + 3, hy - r * 0.42); ctx.lineTo(hx + 8, hy - r * 0.9); ctx.lineTo(hx + 9, hy - r * 0.3);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,.28)';
-      ctx.beginPath();
-      ctx.moveTo(-r * 0.8, -8); ctx.lineTo(-r * 1.25, -13);
-      ctx.lineWidth = 2.5; ctx.stroke();
+    // 贴图就绪就画贴图，否则退回程序化简笔画（觉醒后最初几秒的兜底）
+    const spr = Render.sprites['monster-' + m.type];
+    if (spr) {
+      const bob = m.moving ? Math.sin(time / 90 + m.phase) * 1.4 : 0;
+      const h = r * 2.6;
+      const w = h * spr.width / spr.height;
+      ctx.save();
+      ctx.translate(sx, sy - h * 0.2 + bob);
+      if (m.face < 0) ctx.scale(-1, 1);
+      ctx.drawImage(spr, -w / 2, -h, w, h);
+      if (m.hitFlash > 0) {
+        ctx.globalCompositeOperation = 'source-atop';
+        ctx.fillStyle = `rgba(255,255,255,${Math.min(0.9, m.hitFlash * 8)})`;
+        ctx.fillRect(-w / 2, -h, w, h);
+        ctx.globalCompositeOperation = 'source-over';
+      }
+      ctx.restore();
     } else {
-      // 猪拱嘴 + 小獠牙
-      ctx.fillStyle = 'rgba(0,0,0,.18)';
-      ctx.beginPath();
-      ctx.ellipse(hx + r * 0.42, hy + 1, 4, 3, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = '#eee';
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      ctx.moveTo(hx + 5, hy + 4); ctx.lineTo(hx + 8, hy + 7);
-      ctx.moveTo(hx + 1, hy + 4); ctx.lineTo(hx - 1, hy + 7);
-      ctx.stroke();
+      this.drawMonsterShape(m, sx, sy, T, time);
     }
-
-    // 眼睛
-    ctx.fillStyle = '#1a1a22';
-    ctx.beginPath();
-    ctx.arc(hx + 2, hy - 2, 1.6, 0, Math.PI * 2);
-    ctx.fill();
-
-    // 受击闪白
-    if (m.hitFlash > 0) {
-      ctx.fillStyle = `rgba(255,255,255,${Math.min(0.8, m.hitFlash * 7)})`;
-      ctx.beginPath();
-      ctx.ellipse(0, -6, r, r * 0.78, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
 
     // 定身：脚下缠一圈蓝银草（三个绿色弧）
     if (m.root > 0) {
@@ -315,5 +274,61 @@ const Entities = {
       ctx.fillStyle = `hsl(${100 * frac},62%,46%)`;
       ctx.fillRect(sx - w / 2, sy - r - 15, w * frac, 4);
     }
+  },
+
+  // 程序化简笔兜底（贴图加载前显示用）
+  drawMonsterShape(m, sx, sy, T, time) {
+    const { ctx } = Render;
+    const r = T.r;
+    const bob = m.moving ? Math.sin(time / 90 + m.phase) * 1.6 : 0;
+    ctx.save();
+    ctx.translate(sx, sy + bob);
+    if (m.face < 0) ctx.scale(-1, 1);
+    ctx.fillStyle = T.color;
+    ctx.beginPath();
+    ctx.ellipse(0, -6, r, r * 0.78, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,.28)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    const hx = r * 0.72, hy = -8;
+    ctx.fillStyle = T.color;
+    ctx.beginPath();
+    ctx.ellipse(hx, hy, r * 0.52, r * 0.46, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    if (m.type === 'wolf') {
+      ctx.fillStyle = T.color;
+      ctx.beginPath();
+      ctx.moveTo(hx - 6, hy - r * 0.4); ctx.lineTo(hx - 2, hy - r * 0.95); ctx.lineTo(hx + 2, hy - r * 0.4);
+      ctx.moveTo(hx + 3, hy - r * 0.42); ctx.lineTo(hx + 8, hy - r * 0.9); ctx.lineTo(hx + 9, hy - r * 0.3);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,.28)';
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.8, -8); ctx.lineTo(-r * 1.25, -13);
+      ctx.lineWidth = 2.5; ctx.stroke();
+    } else {
+      ctx.fillStyle = 'rgba(0,0,0,.18)';
+      ctx.beginPath();
+      ctx.ellipse(hx + r * 0.42, hy + 1, 4, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#eee';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(hx + 5, hy + 4); ctx.lineTo(hx + 8, hy + 7);
+      ctx.moveTo(hx + 1, hy + 4); ctx.lineTo(hx - 1, hy + 7);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#1a1a22';
+    ctx.beginPath();
+    ctx.arc(hx + 2, hy - 2, 1.6, 0, Math.PI * 2);
+    ctx.fill();
+    if (m.hitFlash > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${Math.min(0.8, m.hitFlash * 7)})`;
+      ctx.beginPath();
+      ctx.ellipse(0, -6, r, r * 0.78, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   },
 };
