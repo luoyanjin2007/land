@@ -39,7 +39,12 @@ const Render = {
     [TILE_TYPE.PLAZA]: '#c9c2b0',
     [TILE_TYPE.FOUNTAIN]: '#9fc4d8',
     [TILE_TYPE.PATH]: '#c2a575',
-    [TILE_TYPE.LAWN]: '#5d9e4a',   // 与草地同色：城内草坪只是不长野草，观感应一致
+    [TILE_TYPE.LAWN]: '#5d9e4a',
+    [TILE_TYPE.TEMPLE]: '#d4b88a',    // 武魂殿/神庙：金黄石
+    [TILE_TYPE.PALACE]: '#c9a06a',    // 宫殿：深金
+    [TILE_TYPE.COLLEGE]: '#8faac8',   // 学院：灰蓝石
+    [TILE_TYPE.MARKET]: '#d9c29a',    // 市集：浅褐地面
+    [TILE_TYPE.FLOWER]: '#d87ea5',    // 花圃：粉紫
   },
 
   SPRITE_LIST: [
@@ -69,6 +74,11 @@ const Render = {
     [TILE_TYPE.FOUNTAIN]: ['tile-plaza'],
     [TILE_TYPE.HOUSE]: ['tile-grass-2'],
     [TILE_TYPE.WALL]: ['tile-wall-top'],
+    [TILE_TYPE.TEMPLE]: ['tile-plaza'],
+    [TILE_TYPE.PALACE]: ['tile-plaza'],
+    [TILE_TYPE.COLLEGE]: ['tile-plaza'],
+    [TILE_TYPE.MARKET]: ['tile-plaza'],
+    [TILE_TYPE.FLOWER]: ['tile-grass-2'],
   },
 
   init(canvas) {
@@ -314,7 +324,7 @@ const Render = {
 
   // 性能面板（P 键开关）：各图层耗时用指数滑动平均，否则数字跳得看不清。
   // 存在的意义是别再靠"调用次数推算"猜瓶颈——线上读数字才算证据。
-  BUILD: '31b',
+  BUILD: '32b',
   perf: {
     on: false, bare: false, off: {},
     frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0,
@@ -616,9 +626,6 @@ const Render = {
     const cx = sx + CONFIG.TILE / 2;
     const by = sy + CONFIG.TILE;
 
-    // 树和树影全部烤进 chunk：不再有任何逐树的每帧绘制。
-    // 实测树林 43fps 时 JS 只占 3.3ms，20ms 全在 GPU 啃七百多次带斜切的
-    // drawImage——瓶颈是绘制调用数，摆动效果换不来这个代价，所以整个砍掉。
     if (t === TILE_TYPE.FOREST) {
       const size = (30 + this.hash(wx, wy) * 12) | 0;
       this.shadowOn(g, cx, by - 5, size * 0.3);
@@ -630,9 +637,23 @@ const Render = {
       if (isPagoda) this.blitOn(g, 'pagoda-2', cx, by - 2, 42, 46);
       else this.blitOn(g, 'house-2', cx, by - 2, 42, 42);
     }
-    // 墙砖由地面层 TILE_IMG[WALL] 绘制（此前道具层错位重复绘制，已删）
     else if (t === TILE_TYPE.FOUNTAIN) {
       this.blitOn(g, 'fountain', cx, by - 2, 40, 40);
+    }
+    else if (t === TILE_TYPE.TEMPLE) {
+      this.shadowOn(g, cx, by - 2, 20);
+      this.buildTemple(g, cx, by);
+    }
+    else if (t === TILE_TYPE.PALACE) {
+      this.shadowOn(g, cx, by - 2, 22);
+      this.buildPalace(g, cx, by);
+    }
+    else if (t === TILE_TYPE.COLLEGE) {
+      this.shadowOn(g, cx, by - 2, 16);
+      this.buildCollege(g, cx, by);
+    }
+    else if (t === TILE_TYPE.FLOWER) {
+      this.buildFlowerBed(g, cx, by);
     }
     // 紧贴森林北侧的草丛例外，烤进 chunk：草丛层整层贴在所有 chunk 之后，
     // 而南边的树冠会探进这格 11px——放在草丛层里会压在树冠上面。烤进 chunk
@@ -827,6 +848,148 @@ const Render = {
     const img = this.sprites[name];
     if (img && img.complete && img.naturalWidth) {
       g.drawImage(img, cx - w / 2, bottom - h, w, h);
+    }
+  },
+
+  // 程序化武魂殿/神庙：台阶+飞檐+殿身+宝顶（后续替换成 AI 生图）
+  buildTemple(g, cx, by) {
+    const W = 30, H = 40;
+    const x0 = cx - W / 2, y0 = by - H;
+    // 台基
+    g.fillStyle = '#7a6a48';
+    g.fillRect(x0 - 2, by - 8, W + 4, 8);
+    g.fillStyle = '#96835a';
+    g.fillRect(x0, by - 10, W, 4);
+    // 殿身
+    g.fillStyle = '#d4b88a';
+    g.fillRect(x0 + 2, y0 + 16, W - 4, H - 22);
+    // 柱子
+    g.fillStyle = '#a58860';
+    g.fillRect(x0 + 3, y0 + 18, 2, H - 26);
+    g.fillRect(x0 + W - 5, y0 + 18, 2, H - 26);
+    // 门
+    g.fillStyle = '#5a3a1a';
+    g.fillRect(cx - 4, y0 + 22, 8, H - 30);
+    // 飞檐屋顶
+    g.fillStyle = '#b8860b';
+    g.beginPath();
+    g.moveTo(x0 - 4, y0 + 18);
+    g.lineTo(cx, y0 + 2);
+    g.lineTo(x0 + W + 4, y0 + 18);
+    g.closePath();
+    g.fill();
+    g.strokeStyle = '#8b6508';
+    g.lineWidth = 1.5;
+    g.stroke();
+    // 宝顶
+    g.fillStyle = '#f0d060';
+    g.beginPath();
+    g.arc(cx, y0 + 3, 3, 0, Math.PI * 2);
+    g.fill();
+  },
+
+  // 宫殿/大斗魂场：重檐 + 红墙金瓦
+  buildPalace(g, cx, by) {
+    const W = 34, H = 44;
+    const x0 = cx - W / 2, y0 = by - H;
+    // 台基
+    g.fillStyle = '#b89870';
+    g.fillRect(x0 - 2, by - 6, W + 4, 6);
+    // 墙体
+    g.fillStyle = '#c9a06a';
+    g.fillRect(x0 + 1, y0 + 18, W - 2, H - 22);
+    // 红柱
+    g.fillStyle = '#9a3820';
+    g.fillRect(x0 + 3, y0 + 20, 2, H - 26);
+    g.fillRect(x0 + W - 5, y0 + 20, 2, H - 26);
+    // 门
+    g.fillStyle = '#6a2818';
+    g.fillRect(cx - 5, y0 + 24, 10, H - 32);
+    g.fillStyle = '#f0c050';
+    g.fillRect(cx - 0.5, y0 + 28, 1, 8);
+    // 下层屋檐
+    g.fillStyle = '#b8860b';
+    g.fillRect(x0 - 4, y0 + 16, W + 8, 4);
+    g.fillStyle = '#8b6508';
+    g.fillRect(x0 - 4, y0 + 20, W + 8, 1);
+    // 上层屋顶（歇山顶）
+    g.fillStyle = '#d4af37';
+    g.beginPath();
+    g.moveTo(x0 - 6, y0 + 14);
+    g.lineTo(cx - 3, y0 - 2);
+    g.lineTo(cx + 3, y0 - 2);
+    g.lineTo(x0 + W + 6, y0 + 14);
+    g.closePath();
+    g.fill();
+    g.strokeStyle = '#8b6508';
+    g.lineWidth = 1.2;
+    g.stroke();
+    // 脊饰
+    g.fillStyle = '#f0d060';
+    g.fillRect(cx - 2, y0 - 4, 4, 4);
+  },
+
+  // 学院建筑：灰蓝石墙 + 坡屋顶
+  buildCollege(g, cx, by) {
+    const W = 30, H = 34;
+    const x0 = cx - W / 2, y0 = by - H;
+    // 石墙
+    g.fillStyle = '#8faac8';
+    g.fillRect(x0, y0 + 12, W, H - 14);
+    // 石砌纹理
+    g.strokeStyle = 'rgba(0,0,0,.15)';
+    g.lineWidth = 1;
+    for (let row = 0; row < 4; row++) {
+      g.beginPath();
+      g.moveTo(x0, y0 + 14 + row * 5);
+      g.lineTo(x0 + W, y0 + 14 + row * 5);
+      g.stroke();
+    }
+    // 大窗
+    g.fillStyle = '#5a7fa0';
+    g.fillRect(cx - 6, y0 + 16, 12, 8);
+    g.strokeStyle = '#3a5a78';
+    g.strokeRect(cx - 6, y0 + 16, 12, 8);
+    // 窗格十字
+    g.beginPath();
+    g.moveTo(cx, y0 + 16); g.lineTo(cx, y0 + 24);
+    g.moveTo(cx - 6, y0 + 20); g.lineTo(cx + 6, y0 + 20);
+    g.stroke();
+    // 坡屋顶
+    g.fillStyle = '#6a6a8a';
+    g.beginPath();
+    g.moveTo(x0 - 2, y0 + 12);
+    g.lineTo(cx, y0);
+    g.lineTo(x0 + W + 2, y0 + 12);
+    g.closePath();
+    g.fill();
+    g.strokeStyle = '#4a4a6a';
+    g.lineWidth = 1.2;
+    g.stroke();
+    // 屋脊
+    g.fillStyle = '#8a8aaa';
+    g.fillRect(cx - 1, y0 - 1, 2, 3);
+  },
+
+  // 城内花圃：3 朵小花
+  buildFlowerBed(g, cx, by) {
+    g.fillStyle = '#5d9e4a';
+    g.beginPath();
+    g.ellipse(cx, by - 2, 12, 5, 0, 0, Math.PI * 2);
+    g.fill();
+    // 三朵花
+    const cols = ['#ff7eb9', '#ffe066', '#a0e0ff'];
+    for (let i = 0; i < 3; i++) {
+      const fx = cx - 7 + i * 7;
+      const fy = by - 4 - (i % 2) * 2;
+      g.fillStyle = cols[i];
+      g.beginPath();
+      g.arc(fx, fy, 3, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = '#ffe066';
+      g.beginPath();
+      g.arc(fx, fy, 1.2, 0, Math.PI * 2);
+      g.fill();
     }
   },
 

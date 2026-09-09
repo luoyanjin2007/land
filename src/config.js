@@ -1,7 +1,7 @@
 // 全局配置：改这里即可调整世界的基本参数
 const CONFIG = {
-  WORLD_W: 800,      // 世界宽度（格）——按需生成，与内存无关
-  WORLD_H: 800,      // 世界高度（格）
+  WORLD_W: 1200,     // 世界宽度（格）
+  WORLD_H: 1200,     // 世界高度（格）
   TILE: 32,          // 每格像素
   PLAYER_SPEED: 170, // 步行速度（像素/秒）
   RUN_SPEED: 280,    // 按住 Shift 的奔跑速度
@@ -10,7 +10,7 @@ const CONFIG = {
   CHUNK_PX: 512,     // 分块像素尺寸 = CHUNK_TILES × TILE
 };
 
-// 地形类型编号
+// 地形类型编号（0~15 与 v30 兼容，新加的从 16 起）
 const TILE_TYPE = {
   WATER: 0,
   SAND: 1,
@@ -23,5 +23,10 @@ const TILE_TYPE = {
   PLAZA: 8,     // 广场石板
   FOUNTAIN: 9,  // 中央喷泉（不可通行）
   PATH: 10,     // 城际土路
-  LAWN: 11,     // 城内草坪：外观同草地，但不长野草丛和野花（城里要干净）
+  LAWN: 11,     // 城内草坪
+  TEMPLE: 16,   // 武魂殿/神庙（不可通行）
+  PALACE: 17,   // 宫殿/大殿（不可通行）
+  COLLEGE: 18,  // 学院建筑（不可通行）
+  MARKET: 19,   // 市集（可通行，装饰地面）
+  FLOWER: 20,   // 城内花圃（不可通行）
 };
