@@ -39,7 +39,7 @@ const Render = {
     [TILE_TYPE.PLAZA]: '#c9c2b0',
     [TILE_TYPE.FOUNTAIN]: '#9fc4d8',
     [TILE_TYPE.PATH]: '#c2a575',
-    [TILE_TYPE.LAWN]: '#5d9e4a',
+    [TILE_TYPE.LAWN]: '#67a851',   // 城内修剪草坪：比野草亮一档，和野外区分
     [TILE_TYPE.YARD]: '#a88b5a',      // 民居院子：土黄地面
     [TILE_TYPE.TEMPLE]: '#d4b88a',    // 武魂殿/神庙：金黄石
     [TILE_TYPE.PALACE]: '#c9a06a',    // 宫殿：深金
@@ -67,11 +67,11 @@ const Render = {
     [TILE_TYPE.WATER]: ['tile-water'],
     [TILE_TYPE.SAND]: ['tile-sand'],
     [TILE_TYPE.GRASS]: ['tile-grass-2'],
-    [TILE_TYPE.LAWN]: ['tile-grass-2'],
+    [TILE_TYPE.LAWN]: ['tile-lawn'],
     [TILE_TYPE.YARD]: ['tile-dirt'],
     [TILE_TYPE.FOREST]: ['tile-forest'],
     [TILE_TYPE.ROAD]: ['tile-road'],
-    [TILE_TYPE.PATH]: ['tile-dirt', 'tile-dirt', 'tile-gravel'],
+    [TILE_TYPE.PATH]: ['tile-dirt', 'tile-dirt', 'tile-dirt', 'tile-gravel'],
     [TILE_TYPE.PLAZA]: ['tile-plaza'],
     [TILE_TYPE.FOUNTAIN]: ['tile-plaza'],
     [TILE_TYPE.HOUSE]: ['tile-grass-2'],
@@ -107,6 +107,7 @@ const Render = {
     });
     this.loadSprites();
     this.buildBridgeTile();
+    this.buildLawnTile();
     this.bakeMinimap();
     this.snapCamera();
   },
@@ -129,7 +130,47 @@ const Render = {
     this.sprites['tile-bridge'] = c;   // canvas 可直接用于 drawImage
   },
 
+  // 程序化「修剪草坪」地砖：城内专用，比野外 tile-grass-2 平整——
+  // 底色亮一档、只有稀疏细点，没有野草丛/花瓣，配两道浅浅的修剪横纹。
+  // 每格同样的图案 → 大片草坪连成片，和野外的杂乱形成对比。
+  buildLawnTile() {
+    const c = document.createElement('canvas');
+    c.width = c.height = CONFIG.TILE;
+    const g = c.getContext('2d');
+    g.fillStyle = '#67a851';
+    g.fillRect(0, 0, 32, 32);
+    g.fillStyle = 'rgba(255,255,255,.045)';
+    g.fillRect(0, 0, 32, 16);
+    g.fillStyle = 'rgba(0,45,0,.055)';
+    g.fillRect(0, 16, 32, 16);
+    // 稀疏的 2×2 细点（确定性，全部格子一致 → 没有随机补丁感）
+    const dot = ['rgba(255,255,255,.05)', 'rgba(0,50,0,.06)', 'rgba(255,255,255,.07)'];
+    for (let i = 0; i < 26; i++) {
+      const x = (i * 13 + 5) % 30, y = (i * 7 + 3) % 30;
+      g.fillStyle = dot[i % 3];
+      g.fillRect(x, y, 2, 2);
+    }
+    this.sprites['tile-lawn'] = c;
+  },
+
+  // AI 生成的大建筑（JPEG 白底 → 边缘泛洪抠白）。名字与 c.buildings 里的 sprite 对应。
+  // 还没生成的图加载失败 → 标记 false，drawBuildings 退回程序化绘制。
+  BUILDING_LIST: [
+    'farmhut', 'house',                 // 2×2 民居：茅草农舍 / 瓦顶小楼
+    'temple-small', 'temple-m', 'temple-l',  // 武魂殿：小/中/圣殿
+    'college-s', 'college-l',           // 学院配楼 / 主楼
+    'palace', 'arena',                  // 宫殿 / 大斗魂场
+  ],
+
   loadSprites() {
+    for (const b of this.BUILDING_LIST) {
+      const name = 'b-' + b;
+      const img = new Image();
+      img.onload = () => { this.sprites[name] = this.trimWhiteSprite(img); };
+      img.onerror = () => { this.sprites[name] = false; };
+      img.src = `assets/sprites/buildings/${b}.jpg`;
+      this.sprites[name] = null;
+    }
     for (const name of this.SPRITE_LIST) {
       // 怪物贴图用 JPEG（AI 生成的不带透明通道），加载后抠掉白底
       if (name.startsWith('monster-')) {
@@ -178,6 +219,70 @@ const Render = {
     return c;
   },
 
+  // 建筑大图抠白底 + 裁白边：
+  // AI 出的建筑图是粗描边色块、纯白背景。不能像怪物那样按颜色距离全局抠——
+  // 殿身的白墙/窗纸也近白。改为从四条边对"近白"像素泛洪，只抠与外界连通的白；
+  // 粗黑描边把内部浅色封死，白墙原样保留。抠完裁到不透明包围盒，省显存也好缩放。
+  trimWhiteSprite(img) {
+    const S = 1024;                     // 源图统一缩到 1024（显示尺寸远小于此）
+    const sc = document.createElement('canvas');
+    sc.width = sc.height = S;
+    const g = sc.getContext('2d');
+    g.drawImage(img, 0, 0, S, S);
+    const d = g.getImageData(0, 0, S, S), px = d.data;
+    const N = S * S;
+    const light = new Uint8Array(N);   // 近白像素
+    for (let i = 0; i < N; i++) {
+      const r = px[i * 4], gg = px[i * 4 + 1], b = px[i * 4 + 2];
+      const mn = Math.min(r, gg, b), mx = Math.max(r, gg, b);
+      if (mn > 232 && mx - mn < 22) light[i] = 1;
+    }
+    // 从四条边泛洪，标出"与外界连通的白"
+    const ext = new Uint8Array(N);
+    const stack = [];
+    const seed = (x, y) => {
+      const i = y * S + x;
+      if (light[i] && !ext[i]) { ext[i] = 1; stack.push(i); }
+    };
+    for (let x = 0; x < S; x++) { seed(x, 0); seed(x, S - 1); }
+    for (let y = 1; y < S - 1; y++) { seed(0, y); seed(S - 1, y); }
+    while (stack.length) {
+      const i = stack.pop(), x = i % S, y = (i / S) | 0;
+      if (x > 0)     { const j = i - 1; if (light[j] && !ext[j]) { ext[j] = 1; stack.push(j); } }
+      if (x < S - 1) { const j = i + 1; if (light[j] && !ext[j]) { ext[j] = 1; stack.push(j); } }
+      if (y > 0)     { const j = i - S; if (light[j] && !ext[j]) { ext[j] = 1; stack.push(j); } }
+      if (y < S - 1) { const j = i + S; if (light[j] && !ext[j]) { ext[j] = 1; stack.push(j); } }
+    }
+    // 写 alpha：外界白全透；紧贴外界的近白边（描边锯齿）半透做羽化
+    let minX = S, minY = S, maxX = 0, maxY = 0;
+    for (let y = 0; y < S; y++) {
+      for (let x = 0; x < S; x++) {
+        const i = y * S + x;
+        let a = 255;
+        if (ext[i]) a = 0;
+        else if (light[i]) {
+          const touch = (x > 0 && ext[i - 1]) || (x < S - 1 && ext[i + 1]) ||
+                        (y > 0 && ext[i - S]) || (y < S - 1 && ext[i + S]);
+          if (touch) a = 130;
+        }
+        px[i * 4 + 3] = a;
+        if (a > 20) {
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+      }
+    }
+    g.putImageData(d, 0, 0);
+    // 裁到包围盒（留 4px 边，描边不贴边缩放时边缘更干净）
+    const pad = 4;
+    minX = Math.max(0, minX - pad); minY = Math.max(0, minY - pad);
+    maxX = Math.min(S - 1, maxX + pad); maxY = Math.min(S - 1, maxY + pad);
+    const c = document.createElement('canvas');
+    c.width = maxX - minX + 1; c.height = maxY - minY + 1;
+    c.getContext('2d').drawImage(sc, minX, minY, c.width, c.height, 0, 0, c.width, c.height);
+    return c;
+  },
+
   // 所有贴图都在 init 里同时开始下载，但首屏只等两类：
   //   1. 会被烤进 chunk 缓存的（地面、建筑、树、草丛）——残缺的贴图一旦进了
   //      缓存就会一直错到那块 chunk 被淘汰，必须等齐
@@ -185,7 +290,7 @@ const Render = {
   // 剩下 27 张人物动作图共 328KB 从不进缓存，缺帧时 drawPlayer 会退到已就绪的
   // 帧，所以不该挡着开局。首屏必须下完的量因此从 678KB 降到 350KB。
   spritesReady() {
-    return this.SPRITE_LIST.every(n => {
+    const baseReady = this.SPRITE_LIST.every(n => {
       // 人物动作图（懒加载，见 loadSprites 注释）不挡首屏
       if (n.startsWith('player-') && n !== 'player-down-0') return true;
       // 怪物贴图：AI 生成的 JPEG，加载完还要抠白底。
@@ -194,6 +299,12 @@ const Render = {
       const img = this.sprites[n];
       return img && img.complete && img.naturalWidth > 0;
     });
+    // 建筑大图：只等出生点（圣魂村）看得到的农舍和小神庙，
+    // 其余城市的图在后台继续下，没到之前 drawBuildings 用程序化兜底。
+    for (const b of ['b-farmhut', 'b-temple-small']) {
+      if (this.sprites[b] == null) return false;   // null=还在下；false=404 放行走兜底
+    }
+    return baseReady;
   },
 
   // 取第一张已就绪的贴图。人物动作图是懒加载的，刚开局某个方向可能还差几百
@@ -396,18 +507,6 @@ const Render = {
     this.evictFar(Math.floor((this.camX + canvas.width / 2) / S),
                   Math.floor((this.camY + canvas.height / 2) / S));
 
-    // 房屋：不烤进 chunk（否则右半跨 chunk 的房屋会被邻块地面盖住），
-    // 每帧单独遍历可见格，在所有 chunk 贴完之后画。
-    // 先算可见格范围，再画房子——tx0/ty0 在下面才定义，这里提前算一份。
-    const hx0 = Math.max(0, Math.floor((this.camX) / CONFIG.TILE));
-    const hy0 = Math.max(0, Math.floor((this.camY) / CONFIG.TILE));
-    const hx1 = Math.min(CONFIG.WORLD_W - 1, Math.ceil((this.camX + canvas.width) / CONFIG.TILE));
-    const hy1 = Math.min(CONFIG.WORLD_H - 1, Math.ceil((this.camY + canvas.height) / CONFIG.TILE));
-    if (!P.off[1]) this.drawHouses(
-      Math.max(0, hx0 - 1), Math.max(0, hy0 - 1),
-      Math.min(CONFIG.WORLD_W - 1, hx1 + 1),
-      Math.min(CONFIG.WORLD_H - 1, hy1 + 1), time);
-
     // 草丛：静态层整块贴，但在人物周围按格挖一个洞，洞内的草改为逐帧重画，
     // 于是只有人物身边的草会摆动、会被拨开。洞口与格线重合、草丛横向偏移
     // 又被夹在格内，所以挖得干净，不会切到邻格静态草的边。
@@ -432,6 +531,11 @@ const Render = {
       ctx.restore();
       this.drawNearTufts(time);
     }
+
+    // 大建筑（后层）：底边在玩家上方的大殿/小楼。放在草丛层之后画——
+    // 高楼影像向上探出占地很多格，若先于草丛画，北侧的草会"长"在屋顶上。
+    // 不烤进 chunk：大图横跨 chunk 边界会被邻块地面盖住。
+    if (!P.off[1]) this.drawBuildings(false);
 
     // 动态层：水面特效（云影 + 水面涟漪）、雨珠溅落
     const tWater = P.on ? performance.now() : 0;
@@ -474,11 +578,13 @@ const Render = {
     this.scareBirds(time);
     const tRest = P.on ? performance.now() : 0;
 
-    // 战斗层：地面魂技区域 → 魂兽（y 在玩家之前的）→ 人物 → 魂兽（之后）→ 魂技特效
+    // 战斗层：地面魂技区域 → 魂兽（y 在玩家之前的）→ 人物 → 魂兽（之后）
+    // → 大建筑前层（底边在玩家下方的楼，会挡住人和兽）→ 魂技特效
     Combat.drawGround();
     Entities.drawLayer(time, false);
     this.drawPlayer(time);
     Entities.drawLayer(time, true);
+    if (!P.off[1]) this.drawBuildings(true);
     Combat.drawFx();
 
     // 雨丝
@@ -490,23 +596,9 @@ const Render = {
       ctx.fillStyle = `rgba(10,15,40,${night * 0.5})`;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // 窗户亮灯（夜晚才开灯，窗口位置固定在房屋上部）
-      if (night > 0.15) {
-        for (let wy = ty0; wy <= ty1; wy++) {
-          for (let wx = tx0; wx <= tx1; wx++) {
-            if (World.tileAt(wx, wy) !== TILE_TYPE.HOUSE) continue;
-            const hv = this.hash(wx, wy);
-            if (hv < 0.2) continue;   // 少数黑灯的屋子
-            const sx = wx * T - this.camX;
-            const sy = wy * T - this.camY - 2;
-            ctx.fillStyle = `rgba(255,214,120,${Math.min(1, (night - 0.05) * 1.6)})`;
-            ctx.fillRect(sx + 7, sy + 6, 5, 6);
-            ctx.fillRect(sx + 20, sy + 6, 5, 6);
-            ctx.fillStyle = `rgba(255,200,110,${night * 0.18})`;   // 窗灯暖光晕
-            ctx.fillRect(sx + 1, sy, 30, 16);
-          }
-        }
-      }
+      // 建筑灯火：大图是一整张贴图，不能再逐占地格画小窗（会在楼身上叠一层
+      // 整齐的假窗格），改为每栋在窗区位置泛一团暖光；斗魂场露天不长明。
+      if (night > 0.15) this.drawBuildingLights(night);
     }
 
     this.drawMinimap();
@@ -580,11 +672,15 @@ const Render = {
       if (b) g.drawImage(b, sx, sy, CONFIG.TILE, CONFIG.TILE);
     }
     else if (imgs) {
+      // 土路变体按 2×2 区块抽：逐格独立 hash 会让碎石格闪成棋盘
+      const hx = t === TILE_TYPE.PATH ? wx >> 1 : wx;
+      const hy = t === TILE_TYPE.PATH ? wy >> 1 : wy;
       const name = imgs.length === 1
         ? imgs[0]
-        : imgs[Math.floor(this.hash(wx, wy) * imgs.length)];
+        : imgs[Math.floor(this.hash(hx, hy) * imgs.length)];
       const img = this.sprites[name];
-      if (img && img.complete && img.naturalWidth) {
+      // tile-lawn/tile-bridge 是运行时生成的 canvas，没有 complete/naturalWidth
+      if (img && (img instanceof HTMLCanvasElement || (img.complete && img.naturalWidth))) {
         g.drawImage(img, sx, sy, CONFIG.TILE, CONFIG.TILE);
       }
     }
@@ -634,26 +730,99 @@ const Render = {
     }
   },
 
-  // 房屋：单独绘制（不烤进 chunk，避免跨 chunk 被地面盖住）
-  drawHouses(x0, y0, x1, y1, time) {
-    for (let wy = y0; wy <= y1; wy++) {
-      for (let wx = x0; wx <= x1; wx++) {
-        if (World.tileAt(wx, wy) !== TILE_TYPE.HOUSE) continue;
-        // 2×2 房屋：只有左上角（北/西邻居都不是 HOUSE）才画
-        const northIsHouse = World.tileAt(wx, wy - 1) === TILE_TYPE.HOUSE;
-        const westIsHouse = World.tileAt(wx - 1, wy) === TILE_TYPE.HOUSE;
-        if (northIsHouse || westIsHouse) continue;
-        const sx = wx * CONFIG.TILE - this.camX;
-        const sy = wy * CONFIG.TILE - this.camY;
-        const cx = sx + CONFIG.TILE / 2;
-        const isBig = this.hash(wx, wy) > 0.78;
-        const bw = 56, bh = 64;
-        const bx = cx + CONFIG.TILE / 2;  // 两格正中间
-        const by2 = sy + CONFIG.TILE * 2; // 房块底边
-        this.shadowOn(this.ctx, bx, by2 - 4, 20);
-        this.buildHouse2x2(this.ctx, bx, by2, bw, bh, isBig);
+  // 枚举屏内所有登记建筑，回调收到 { b, cx, by, wpx, hpx }。
+  // cx/by 是屏幕坐标，by = 占地底边（深度排序的锚线）。
+  forEachVisibleBuilding(cb) {
+    const T = CONFIG.TILE;
+    const vx0 = this.camX - 260, vy0 = this.camY - 700;   // 上头要给高楼留余量
+    const vx1 = this.camX + this.canvas.width + 260;
+    const vy1 = this.camY + this.canvas.height + 120;
+    for (const c of World.cities) {
+      if ((c.x + c.w) * T < vx0 || c.x * T > vx1 ||
+          (c.y + c.h) * T < vy0 || c.y * T > vy1) continue;
+      if (!c.buildings) World.getCityLayout(c);
+      for (const b of c.buildings) {
+        const wpx = b.w * T, hpx = b.h * T;
+        const bx0 = (c.x + b.x) * T, by0 = (c.y + b.y) * T;
+        if (bx0 + wpx < vx0 || bx0 > vx1 || by0 + hpx < vy0 || by0 > vy1) continue;
+        cb({
+          b,
+          cx: bx0 + wpx / 2 - this.camX,
+          by: by0 + hpx - this.camY + 2,     // 锚点：占地底边中点
+          wpx, hpx,
+          ox: c.x + b.x, oy: c.y + b.y,      // 占地世界格原点（确定性 hash 用）
+          bottomWorld: (c.y + b.y + b.h) * T,
+        });
       }
     }
+  },
+
+  // 大建筑：逐城遍历登记表，AI 图没就绪时退回程序化绘制。
+  // 分两层穿插进人物/魂兽的绘制：front=false 只画底边在玩家上方（更远）的，
+  // 在动态层之前画；front=true 画底边在玩家下方（更近）的，在人物魂兽之后画——
+  // 否则人走到大殿北侧会踩在屋顶上。
+  drawBuildings(front) {
+    const ctx = this.ctx, py = Player.y;
+    this.forEachVisibleBuilding(({ b, cx, by, wpx, hpx, bottomWorld }) => {
+      if ((bottomWorld > py) !== front) return;
+      // 影子（占地椭圆）
+      this.shadowOn(ctx, cx, by - 2, wpx * 0.42);
+      const spr = this.sprites['b-' + b.sprite];
+      if (spr && spr !== false) {
+        // 宽高都装进目标盒，取较小缩放：屋檐可以外扩，高度随规模。
+        // 中型地标（temple-m 4×4）宽度给足，否则宽度约束下只比民宅高一点；
+        // 超大院（temple-l/palace）高度必须限幅，否则 2.2× 占地深 = 1400px，
+        // 站在城南也截不全整栋楼。
+        const kw = b.w >= 15 ? 1.15 : b.w >= 8 ? 1.22 : b.w >= 4 ? 1.9 : 1.5;
+        const kh = b.w >= 15 ? 1.7 : b.w >= 7 ? 1.9 : 2.2;
+        const maxH = b.w >= 15 ? 680 : b.w >= 8 ? 470 : Infinity;
+        let k = Math.min(wpx * kw / spr.width, hpx * kh / spr.height);
+        if (spr.height * k > maxH) k *= maxH / (spr.height * k);
+        const dw = spr.width * k, dh = spr.height * k;
+        ctx.drawImage(spr, cx - dw / 2, by - dh, dw, dh);
+      } else {
+        this.drawBuildingFallback(b, cx, by);
+      }
+    });
+  },
+
+  // 夜晚的建筑灯火：只给民宅窗区一团贴楼身的暖光（地标大图自带画好的灯火，
+  // 再糊光只会浮在屋顶上头），少数屋子黑灯。
+  drawBuildingLights(night) {
+    const ctx = this.ctx;
+    ctx.save();
+    this.forEachVisibleBuilding(({ b, cx, by, wpx, hpx, ox, oy }) => {
+      if (b.sprite !== 'house' && b.sprite !== 'farmhut') return;
+      // 用占地世界原点做确定性 hash：同栋楼每晚灯况一致
+      if (this.hash(ox * 3 + 1, oy * 3 + 7) < 0.18) return;
+      const a = Math.min(0.14, (night - 0.12) * 0.28);
+      ctx.fillStyle = `rgba(255,205,120,${a})`;
+      ctx.beginPath();
+      ctx.ellipse(cx, by - hpx * 0.55, wpx * 0.38, hpx * 0.3, 0, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.restore();
+  },
+
+  // 大建筑 AI 图没生成时的程序化兜底（按占地规模缩放）
+  drawBuildingFallback(b, cx, by) {
+    const ctx = this.ctx, T = CONFIG.TILE;
+    ctx.save();
+    ctx.translate(cx, by);
+    if (b.sprite.startsWith('temple')) {
+      ctx.scale(b.w * T / 32, b.w * T / 32);
+      this.buildTemple(ctx, 0, 0);
+    } else if (b.sprite === 'palace' || b.sprite === 'arena') {
+      ctx.scale(b.w * T / 38, b.w * T / 38);
+      this.buildPalace(ctx, 0, 0);
+    } else if (b.sprite.startsWith('college')) {
+      ctx.scale(b.w * T / 34, b.w * T / 34);
+      this.buildCollege(ctx, 0, 0);
+    } else {
+      ctx.scale(b.w * T / 56, b.w * T / 56);
+      this.buildHouse2x2(ctx, 0, 0, 56, 64, false);
+    }
+    ctx.restore();
   },
 
   // 静态建筑与树木：画进 chunk
@@ -670,18 +839,8 @@ const Render = {
     else if (t === TILE_TYPE.FOUNTAIN) {
       this.blitOn(g, 'fountain', cx, by - 2, 40, 40);
     }
-    else if (t === TILE_TYPE.TEMPLE) {
-      this.shadowOn(g, cx, by - 2, 20);
-      this.buildTemple(g, cx, by);
-    }
-    else if (t === TILE_TYPE.PALACE) {
-      this.shadowOn(g, cx, by - 2, 22);
-      this.buildPalace(g, cx, by);
-    }
-    else if (t === TILE_TYPE.COLLEGE) {
-      this.shadowOn(g, cx, by - 2, 16);
-      this.buildCollege(g, cx, by);
-    }
+    // TEMPLE / PALACE / COLLEGE / HOUSE 都由 drawBuildings 按登记表画整张大图，
+    // 这里不再逐格烤建筑，只铺地面（drawGroundInto 已处理）
     else if (t === TILE_TYPE.FLOWER) {
       this.buildFlowerBed(g, cx, by);
     }

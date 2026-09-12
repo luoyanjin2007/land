@@ -72,39 +72,82 @@ function cityWalls(g, w, h, gates) {
   for (const gy of gates.y) { g[gy][0] = TILE_TYPE.ROAD; g[gy][w - 1] = TILE_TYPE.ROAD; }
 }
 
-// 通用：放一个 2×2 的房子。(x,y) 会向下取整到偶数格 —— 房块必须偶数对齐，
-// 否则会横跨 16 格的 chunk 边界，右半边被后画的相邻 chunk 盖掉（房子看起来裂开）。
-// 渲染端也靠"左上角是偶数坐标"来认锚点，两边必须一致。
-// 四格里有非空地（路/墙/建筑）就整块不放，避免压到街道。
-function placeHouse2x2(g, x, y) {
-  const h = g.length, w = g[0].length;
-  x &= ~1; y &= ~1;                       // 对齐到偶数
-  if (x < 0 || y < 0 || x + 1 >= w || y + 1 >= h) return false;
-  for (let dy = 0; dy < 2; dy++)
-    for (let dx = 0; dx < 2; dx++) {
+// 通用：放一栋大建筑。填占地格（tile）+ 在 c.buildings 登记一张大图（sprite），
+// 渲染端把整张 AI 生成图缩放锚定到这块矩形上，不再逐格画小房子。
+// 偶数宽的建筑把 x 向下取整到偶数（与巷弄网格对齐）。
+// 占地内有墙/树/已有建筑就放弃；overRoad=true 的地标可以骑在先画的大道上
+// （圣殿/主楼/斗魂场故意压在中轴线尽头，路到门前自然断掉）。
+function placeBuilding(c, g, x, y, w, h, tile, sprite, overRoad = false) {
+  const H = g.length, W = g[0].length;
+  if ((w & 1) === 0) x &= ~1;
+  if (x < 0 || y < 0 || x + w > W || y + h > H) return false;
+  for (let dy = 0; dy < h; dy++)
+    for (let dx = 0; dx < w; dx++) {
       const t = g[y + dy][x + dx];
-      if (t !== TILE_TYPE.LAWN && t !== TILE_TYPE.GRASS && t !== TILE_TYPE.YARD) return false;
+      if (t !== TILE_TYPE.LAWN && t !== TILE_TYPE.GRASS &&
+          t !== TILE_TYPE.YARD && t !== TILE_TYPE.PLAZA &&
+          !(overRoad && t === TILE_TYPE.ROAD)) return false;
     }
-  for (let dy = 0; dy < 2; dy++)
-    for (let dx = 0; dx < 2; dx++) g[y + dy][x + dx] = TILE_TYPE.HOUSE;
+  fillRect(g, x, y, x + w - 1, y + h - 1, tile);
+  c.buildings.push({ x, y, w, h, sprite, tile });
   return true;
 }
 
-// 通用：在一个矩形街区里放满 2×2 房子 + 院子小巷
-// 步长 4（2 格房 + 2 格院巷），起点对齐到偶数，保证每块房都是偶数对齐的。
-// 空出来的格子全部变 YARD（土黄地面，可走），整片街区不留草坪。
-function fillBlock2x2(g, x0, y0, x1, y1, rng, density = 0.8) {
-  const sx = (x0 + 1) & ~1, sy = (y0 + 1) & ~1;   // 向上取到偶数，别越出街区
+// 通用：放一个 2×2 的民居（sprite = 贴图名，如 'farmhut' / 'house'）
+function placeHouse2x2(c, g, x, y, sprite) {
+  return placeBuilding(c, g, x, y, 2, 2, TILE_TYPE.HOUSE, sprite);
+}
+
+// 通用：在一个矩形街区里放满 2×2 民居 + 院子小巷
+// 步长 4（2 格房 + 2 格院巷）。sprites 是贴图名池子，每栋按 rng 挑一个变体。
+// 没放房子的格子不再整片浇成泥地（远看像工地）：只有紧贴房子的一圈变 YARD
+// 土院，其余保持草地——要么被 cityInfill 补建，要么最终变成修剪过的草坪。
+function fillBlock2x2(c, g, x0, y0, x1, y1, rng, density = 0.8, sprites = ['farmhut', 'house']) {
+  const sx = (x0 + 1) & ~1, sy = (y0 + 1) & ~1;   // 向上取到偶数
   for (let y = sy; y + 1 <= y1; y += 4) {
     for (let x = sx; x + 1 <= x1; x += 4) {
-      if (rng() < density) placeHouse2x2(g, x, y);
+      if (rng() < density)
+        placeHouse2x2(c, g, x, y, sprites[Math.floor(rng() * sprites.length)]);
     }
   }
-  // 剩下的空地 = 院子/小巷
-  for (let y = y0; y <= y1; y++)
-    for (let x = x0; x <= x1; x++)
-      if (g[y][x] === TILE_TYPE.LAWN || g[y][x] === TILE_TYPE.GRASS)
-        g[y][x] = TILE_TYPE.YARD;
+  yardAroundHouses(g, x0, y0, x1, y1);
+}
+
+// 矩形里贴房子（四邻）的草地变土院
+function yardAroundHouses(g, x0, y0, x1, y1) {
+  const H = g.length, W = g[0].length;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const t = g[y][x];
+      if (t !== TILE_TYPE.LAWN && t !== TILE_TYPE.GRASS && t !== TILE_TYPE.YARD) continue;
+      let near = false;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx, ny = y + dy;
+        if (nx >= 0 && ny >= 0 && nx < W && ny < H && g[ny][nx] === TILE_TYPE.HOUSE) { near = true; break; }
+      }
+      if (near) g[y][x] = TILE_TYPE.YARD;
+    }
+  }
+}
+
+// 全城补建：各城规划街区时难免留下没覆盖的草地空档（中轴两侧尤其多），
+// 生成末尾按同一张 4 步网格扫一遍，2×2 全是野草/土院就按密度补一栋民居。
+// 只认 GRASS/YARD：广场、道路、市集、花圃、树篱、人工草坪（LAWN 操场/花园）
+// 都不可占；建筑占地更不会碰。必须在所有道路之后调用。
+function cityInfill(c, g, rng, density, sprites, skipFn = null) {
+  const W = g[0].length, H = g.length;
+  for (let y = 2; y + 1 < H - 1; y += 4) {
+    for (let x = 2; x + 1 < W - 1; x += 4) {
+      if (skipFn && skipFn(x, y)) continue;
+      if (rng() >= density) continue;
+      let ok = true;
+      for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
+        const t = g[y + dy][x + dx];
+        if (t !== TILE_TYPE.GRASS && t !== TILE_TYPE.YARD) { ok = false; break; }
+      }
+      if (ok) placeHouse2x2(c, g, x, y, sprites[Math.floor(rng() * sprites.length)]);
+    }
+  }
 }
 
 // 通用：沿街两侧放房子，指定路段和密度（保留兼容，小城镇还用）
@@ -147,8 +190,8 @@ function genShenghunVillage(c, g, set, get, rng) {
   const midX = Math.floor(w / 2);
   for (let y = 2; y < mainY; y++) g[y][midX] = TILE_TYPE.ROAD;
 
-  // 村北中央：武魂殿小殿（2×2 神庙，前有小广场）
-  fillRect(g, midX - 1, 2, midX, 4, TILE_TYPE.TEMPLE);
+  // 村北中央：武魂殿小殿（一张大图占 3×3，前有小广场）
+  placeBuilding(c, g, midX - 1, 2, 3, 3, TILE_TYPE.TEMPLE, 'temple-small', true);
   fillRect(g, midX - 2, 5, midX + 1, 5, TILE_TYPE.PLAZA);
 
   // 村头老槐树（西南角，大树 = 3 格 FOREST）
@@ -156,12 +199,12 @@ function genShenghunVillage(c, g, set, get, rng) {
   g[mainY - 2][1] = TILE_TYPE.FOREST;
   g[mainY - 1][2] = TILE_TYPE.FOREST;
 
-  // 主街北侧：三户 2×2 人家（偶数坐标，不跨 chunk）
-  placeHouse2x2(g, 2, 6);    // 西户
-  placeHouse2x2(g, 6, 6);    // 中户
-  placeHouse2x2(g, 16, 6);   // 东户
+  // 主街北侧：三户 2×2 茅草农舍（避开中央道路 x=10 和殿前广场）
+  placeHouse2x2(c, g, 2, 6, 'farmhut');
+  placeHouse2x2(c, g, 12, 3, 'farmhut');
+  placeHouse2x2(c, g, 16, 6, 'farmhut');
   // 主街南侧：一户
-  placeHouse2x2(g, 6, 12);   // 南户
+  placeHouse2x2(c, g, 3, mainY + 1, 'farmhut');
 
   // 院子（房子周围一圈土黄地面，代替草坪）
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
@@ -189,30 +232,30 @@ function genNuodingCity(c, g, set, get, rng) {
   // 中心小广场
   fillRect(g, mx - 1, my - 1, mx + 1, my + 1, TILE_TYPE.PLAZA);
 
-  // 东城：武魂分殿（3×3 殿+前广场）
-  const tX = mx + 5, tY = my - 7;
-  fillRect(g, tX, tY, tX + 3, tY + 3, TILE_TYPE.TEMPLE);
+  // 东城：武魂分殿（一张大图 4×4 + 前广场）
+  const tX = mx + 5, tY = my - 8;
+  placeBuilding(c, g, tX, tY, 4, 4, TILE_TYPE.TEMPLE, 'temple-m');
   fillRect(g, tX - 1, tY + 4, tX + 4, tY + 4, TILE_TYPE.PLAZA);
   for (let y = my - 1; y > tY + 4; y--) g[y][tX + 2] = TILE_TYPE.ROAD;
 
-  // 北城：学院区（诺丁学院，4×5 学院建筑群 + 操场）
-  const acX = mx - 10, acY = 2;
-  fillRect(g, acX, acY + 1, acX + 5, acY + 5, TILE_TYPE.COLLEGE);
-  fillRect(g, acX + 6, acY + 2, acX + 10, acY + 6, TILE_TYPE.LAWN);
+  // 北城：学院区（诺丁学院，6×5 大图 + 操场）
+  const acX = mx - 11, acY = 2;
+  placeBuilding(c, g, acX, acY + 1, 6, 5, TILE_TYPE.COLLEGE, 'college-s');
+  fillRect(g, acX + 7, acY + 2, acX + 11, acY + 6, TILE_TYPE.LAWN);
   for (let y = 1; y < my; y++) g[y][acX - 2] = TILE_TYPE.ROAD;
-  for (let x = acX - 2; x <= acX + 11; x++) g[acY][x] = TILE_TYPE.ROAD;
+  for (let x = acX - 2; x <= acX + 12; x++) g[acY][x] = TILE_TYPE.ROAD;
 
   // 南城：市集（主街南侧一大片 MARKET）
   fillRect(g, mx - 5, my + 2, mx + 5, my + 6, TILE_TYPE.MARKET);
 
   // 西南民宅区：2×2 房子密集排布
-  fillBlock2x2(g, 2, my + 3, mx - 7, h - 3, rng, 0.75);
+  fillBlock2x2(c, g, 2, my + 3, mx - 7, h - 3, rng, 0.75);
 
   // 东南民宅区
-  fillBlock2x2(g, mx + 7, my + 2, w - 3, h - 3, rng, 0.7);
+  fillBlock2x2(c, g, mx + 7, my + 2, w - 3, h - 3, rng, 0.7);
 
   // 东北零散民宅
-  fillBlock2x2(g, mx + 7, 2, w - 3, my - 2, rng, 0.55);
+  fillBlock2x2(c, g, mx + 7, 2, w - 3, my - 2, rng, 0.55);
 
   // 几处花圃点缀
   for (let i = 0; i < 6; i++) {
@@ -220,6 +263,9 @@ function genNuodingCity(c, g, set, get, rng) {
     const fy = 2 + Math.floor(rng() * (h - 4));
     if (g[fy][fx] === TILE_TYPE.LAWN) g[fy][fx] = TILE_TYPE.FLOWER;
   }
+
+  // 没规划到的草地空档补成民居（镇级密度，农舍与瓦楼混搭）
+  cityInfill(c, g, rng, 0.45, ['farmhut', 'house']);
 }
 
 // 3. 史莱克学院：纯学院风，没有城墙，教学楼围绕中央大操场
@@ -244,23 +290,22 @@ function genShrekAcademy(c, g, set, get, rng) {
   // 中央大操场（PLAZA 大片空地）
   fillRect(g, mx - 8, my - 4, mx + 8, my + 6, TILE_TYPE.PLAZA);
 
-  // 北侧主教学楼（5×3，学院建筑）
-  fillRect(g, mx - 5, 3, mx + 5, 7, TILE_TYPE.COLLEGE);
-  fillRect(g, mx - 2, 7, mx + 2, 8, TILE_TYPE.PLAZA);
+  // 北侧主教学楼（一张大图 11×5 + 楼前台阶广场）
+  placeBuilding(c, g, mx - 5, 3, 11, 5, TILE_TYPE.COLLEGE, 'college-l', true);
+  fillRect(g, mx - 2, 8, mx + 2, 8, TILE_TYPE.PLAZA);
 
-  // 东西两侧教学楼
-  fillRect(g, mx - 16, my - 6, mx - 10, my - 1, TILE_TYPE.COLLEGE);
-  fillRect(g, mx + 10, my - 6, mx + 16, my - 1, TILE_TYPE.COLLEGE);
+  // 东西两侧教学楼（各 7×6）
+  placeBuilding(c, g, mx - 16, my - 6, 7, 6, TILE_TYPE.COLLEGE, 'college-s');
+  placeBuilding(c, g, mx + 10, my - 6, 7, 6, TILE_TYPE.COLLEGE, 'college-s');
 
-  // 武魂测试馆（东侧独立建筑）
-  fillRect(g, mx + 12, my + 2, mx + 18, my + 5, TILE_TYPE.TEMPLE);
+  // 武魂测试馆（东侧独立建筑，7×4）
+  placeBuilding(c, g, mx + 12, my + 2, 7, 4, TILE_TYPE.TEMPLE, 'temple-m');
 
-  // 食堂（西南角，2×3 大平房）
-  fillRect(g, mx - 18, my + 4, mx - 15, my + 7, TILE_TYPE.HOUSE);
-  fillRect(g, mx - 17, my + 4, mx - 16, my + 7, TILE_TYPE.HOUSE);
+  // 食堂（西南角，2×2）
+  placeHouse2x2(c, g, mx - 18, my + 5, 'house');
 
   // 宿舍区（西北角，成片 2×2 宿舍楼）
-  fillBlock2x2(g, mx - 28, 12, mx - 10, 26, rng, 0.85);
+  fillBlock2x2(c, g, mx - 28, 12, mx - 10, 26, rng, 0.85, ['house']);
 
   // 宿舍区主路
   for (let y = 12; y < 26; y++) g[y][mx - 19] = TILE_TYPE.ROAD;
@@ -285,6 +330,9 @@ function genShrekAcademy(c, g, set, get, rng) {
 
   // 主入口标牌（南门外，用广场格代替）
   fillRect(g, mx - 1, h - 2, mx + 1, h - 1, TILE_TYPE.PLAZA);
+
+  // 学院是绿地校园，只低密度补建（杂役房/库房），留出大片草坪
+  cityInfill(c, g, rng, 0.2, ['house']);
 }
 
 // 4. 索托城：商业大城，中轴线 + 大斗魂场 + 密集店铺
@@ -312,10 +360,10 @@ function genSuotoCity(c, g, set, get, rng) {
   fillRect(g, mx - 3, my - 3, mx + 3, my + 3, TILE_TYPE.PLAZA);
   g[my][mx] = TILE_TYPE.FOUNTAIN;
 
-  // 大斗魂场（城北中心，4×5 大型建筑）
+  // 大斗魂场（城北中心，一张大图 9×7 + 门前广场）
   const arenaX = mx - 4, arenaY = 4;
-  fillRect(g, arenaX, arenaY, arenaX + 8, arenaY + 6, TILE_TYPE.PALACE);
-  fillRect(g, arenaX - 2, arenaY + 6, arenaX + 10, arenaY + 8, TILE_TYPE.PLAZA);
+  placeBuilding(c, g, arenaX, arenaY, 9, 7, TILE_TYPE.PALACE, 'arena', true);
+  fillRect(g, arenaX - 2, arenaY + 7, arenaX + 10, arenaY + 8, TILE_TYPE.PLAZA);
   for (let y = arenaY + 8; y < my; y++) g[y][mx] = TILE_TYPE.ROAD;
 
   // 东西两大市集（密集店铺区）
@@ -323,16 +371,14 @@ function genSuotoCity(c, g, set, get, rng) {
   fillRect(g, mx + 20, my - 12, w - 4, my - 3, TILE_TYPE.MARKET);
 
   // 城北两侧：高档民宅（低密度，大宅院）
-  fillBlock2x2(g, 3, 3, mx - 20, my - 16, rng, 0.5);
-  fillBlock2x2(g, mx + 20, 3, w - 4, my - 16, rng, 0.5);
+  fillBlock2x2(c, g, 3, 3, mx - 20, my - 16, rng, 0.5, ['house']);
+  fillBlock2x2(c, g, mx + 20, 3, w - 4, my - 16, rng, 0.5, ['house']);
 
   // 城南大片密集民宅区（被两条横街分成三块）
-  // 南区中心块（主街和南二街之间）
-  fillBlock2x2(g, 3, my + 2, mx - 19, my + 14, rng, 0.82);
-  fillBlock2x2(g, mx + 19, my + 2, w - 4, my + 14, rng, 0.82);
-  // 南区南块（南二街以南）
-  fillBlock2x2(g, 3, my + 16, mx - 19, h - 4, rng, 0.78);
-  fillBlock2x2(g, mx + 19, my + 16, w - 4, h - 4, rng, 0.78);
+  fillBlock2x2(c, g, 3, my + 2, mx - 19, my + 14, rng, 0.82);
+  fillBlock2x2(c, g, mx + 19, my + 2, w - 4, my + 14, rng, 0.82);
+  fillBlock2x2(c, g, 3, my + 16, mx - 19, h - 4, rng, 0.78);
+  fillBlock2x2(c, g, mx + 19, my + 16, w - 4, h - 4, rng, 0.78);
 
   // 几处花圃点缀
   for (let i = 0; i < 12; i++) {
@@ -340,6 +386,9 @@ function genSuotoCity(c, g, set, get, rng) {
     const fy = 3 + Math.floor(rng() * (h - 6));
     if (g[fy][fx] === TILE_TYPE.LAWN) g[fy][fx] = TILE_TYPE.FLOWER;
   }
+
+  // 商业大城：街区之间的草地空档全部补满瓦楼
+  cityInfill(c, g, rng, 0.6, ['house']);
 }
 
 // 5. 星罗城：帝都，三道城墙（宫城/皇城/外城），棋盘街格局
@@ -361,23 +410,18 @@ function genXingluoCity(c, g, set, get, rng) {
   g[py0 + Math.floor(ph / 2)][px0] = TILE_TYPE.ROAD;
   g[py0 + Math.floor(ph / 2)][px1] = TILE_TYPE.ROAD;
 
-  // 宫城（皇城内圈，PALACE）
+  // 宫城（皇城内圈，一张大殿图占整块 PALACE）
   const cw = Math.floor(pw * 0.55), ch_ = Math.floor(ph * 0.55);
   const cx0 = mx - Math.floor(cw / 2), cy0 = my - Math.floor(ch_ / 2);
   const cx1 = cx0 + cw, cy1 = cy0 + ch_;
-  fillRect(g, cx0, cy0, cx1, cy1, TILE_TYPE.PALACE);
-  for (let i = 0; i < 8; i++) {
-    const fx = cx0 + 2 + Math.floor(rng() * (cw - 4));
-    const fy = cy0 + 2 + Math.floor(rng() * (ch_ - 4));
-    if (g[fy][fx] === TILE_TYPE.PALACE) g[fy][fx] = TILE_TYPE.FLOWER;
-  }
+  placeBuilding(c, g, cx0, cy0, cw, ch_, TILE_TYPE.PALACE, 'palace');
   fillRect(g, cx0 - 3, cy1 + 1, cx1 + 3, cy1 + 3, TILE_TYPE.PLAZA);
 
-  // 皇城内部：官署区 + 官邸（2×2 大宅，低密度）
-  fillBlock2x2(g, px0 + 2, py0 + 2, px1 - 2, cy0 - 3, rng, 0.35);
-  fillBlock2x2(g, px0 + 2, cy1 + 5, px1 - 2, py1 - 2, rng, 0.35);
-  fillBlock2x2(g, px0 + 2, py0 + 2, cx0 - 3, py1 - 2, rng, 0.3);
-  fillBlock2x2(g, cx1 + 3, py0 + 2, px1 - 2, py1 - 2, rng, 0.3);
+  // 皇城内部：官署区 + 官邸（低密度，暂用民居图，之后换大宅）
+  fillBlock2x2(c, g, px0 + 2, py0 + 2, px1 - 2, cy0 - 3, rng, 0.35, ['house']);
+  fillBlock2x2(c, g, px0 + 2, cy1 + 5, px1 - 2, py1 - 2, rng, 0.35, ['house']);
+  fillBlock2x2(c, g, px0 + 2, py0 + 2, cx0 - 3, py1 - 2, rng, 0.3, ['house']);
+  fillBlock2x2(c, g, cx1 + 3, py0 + 2, px1 - 2, py1 - 2, rng, 0.3, ['house']);
   // 皇城内十字大街
   for (let x = px0 + 1; x < px1; x++) g[my][x] = TILE_TYPE.ROAD;
   for (let y = py0 + 1; y < py1; y++) g[y][mx] = TILE_TYPE.ROAD;
@@ -393,7 +437,7 @@ function genXingluoCity(c, g, set, get, rng) {
   // 外城：贵族区（东北，低密度大宅）
   for (let bx = mx + 1; bx < w - 3; bx += 12) {
     for (let by = 2; by < py0 - 3; by += 12) {
-      fillBlock2x2(g, bx + 1, by + 1, Math.min(bx + 10, w - 3), Math.min(by + 10, py0 - 3), rng, 0.35);
+      fillBlock2x2(c, g, bx + 1, by + 1, Math.min(bx + 10, w - 3), Math.min(by + 10, py0 - 3), rng, 0.35, ['house']);
     }
   }
   // 西南市集
@@ -404,13 +448,13 @@ function genXingluoCity(c, g, set, get, rng) {
       // 跳过皇城范围和市集
       if (bx + 10 >= px0 && bx <= px1 && by + 10 >= py0 && by <= py1) continue;
       if (by > my + 11 && bx < mx - 11) continue; // 西南市集
-      fillBlock2x2(g, bx + 1, by + 1, Math.min(bx + 10, w - 3), Math.min(by + 10, h - 3), rng, 0.75);
+      fillBlock2x2(c, g, bx + 1, by + 1, Math.min(bx + 10, w - 3), Math.min(by + 10, h - 3), rng, 0.75);
     }
   }
 
-  // 寺庙点缀
-  g[3][mx - 35] = TILE_TYPE.TEMPLE;
-  g[h - 4][mx + 30] = TILE_TYPE.TEMPLE;
+  // 寺庙点缀（各 2×2 一座小殿）
+  placeBuilding(c, g, mx - 36, 2, 2, 2, TILE_TYPE.TEMPLE, 'temple-small');
+  placeBuilding(c, g, mx + 30, h - 4, 2, 2, TILE_TYPE.TEMPLE, 'temple-small');
 
   // 中心大花园
   fillRect(g, mx - 4, py1 + 4, mx + 4, py1 + 10, TILE_TYPE.LAWN);
@@ -419,6 +463,9 @@ function genXingluoCity(c, g, set, get, rng) {
     const fy = py1 + 5 + Math.floor(rng() * 5);
     g[fy][fx] = rng() < 0.6 ? TILE_TYPE.FLOWER : TILE_TYPE.FOREST;
   }
+
+  // 帝都棋盘格的草地空档补建宅院（皇城内圈同样补，官署区密度不高）
+  cityInfill(c, g, rng, 0.5, ['house']);
 }
 
 // 6. 武魂城：圣地，三圈同心结构 + 中央武魂殿圣殿
@@ -448,37 +495,37 @@ function genWuhunCity(c, g, set, get, rng) {
   g[my0][mx] = TILE_TYPE.ROAD; g[my1][mx] = TILE_TYPE.ROAD;
   g[my][mx0] = TILE_TYPE.ROAD; g[my][mx1] = TILE_TYPE.ROAD;
 
-  // 中央圣殿
-  const tx0 = mx - 5, tx1 = mx + 5;
-  const ty0 = my - 7, ty1 = my + 3;
-  fillRect(g, tx0, ty0, tx1, ty1, TILE_TYPE.TEMPLE);
-  fillRect(g, tx0 - 3, ty1 + 1, tx1 + 3, ty1 + 4, TILE_TYPE.PLAZA);
-  for (let y = ty1 + 5; y < h - 3; y++) g[y][mx] = TILE_TYPE.ROAD;
+  // 中央圣殿（一张大图 11×11 + 殿前大台阶广场）
+  const tx0 = mx - 5, ty0 = my - 7;
+  placeBuilding(c, g, tx0, ty0, 11, 11, TILE_TYPE.TEMPLE, 'temple-l');
+  fillRect(g, tx0 - 3, my + 4, tx0 + 13, my + 7, TILE_TYPE.PLAZA);
+  for (let y = my + 8; y < h - 3; y++) g[y][mx] = TILE_TYPE.ROAD;
   for (let x = 3; x < w - 3; x++) g[my][x] = TILE_TYPE.ROAD;
   for (let y = 3; y < h - 3; y++) g[y][mx] = TILE_TYPE.ROAD;
 
-  // 内圈（圣殿外）：武魂分殿 + 长老殿 + 草坪花圃
+  // 内圈（圣殿外）：四座小型分殿（各 2×2 大图）+ 花圃
+  placeBuilding(c, g, mx - 12, iy0 + 3, 2, 2, TILE_TYPE.TEMPLE, 'temple-small');
+  placeBuilding(c, g, mx + 10, iy0 + 3, 2, 2, TILE_TYPE.TEMPLE, 'temple-small');
+  placeBuilding(c, g, mx - 12, iy1 - 5, 2, 2, TILE_TYPE.TEMPLE, 'temple-small');
+  placeBuilding(c, g, mx + 10, iy1 - 5, 2, 2, TILE_TYPE.TEMPLE, 'temple-small');
   for (let y = iy0 + 1; y < iy1; y++) {
     for (let x = ix0 + 1; x < ix1; x++) {
-      if (g[y][x] !== TILE_TYPE.LAWN) continue;
-      if (rng() < 0.12) g[y][x] = TILE_TYPE.TEMPLE;
-      else if (rng() < 0.22) g[y][x] = TILE_TYPE.FLOWER;
+      if (g[y][x] === TILE_TYPE.LAWN && rng() < 0.1) g[y][x] = TILE_TYPE.FLOWER;
     }
   }
   for (let x = ix0 + 2; x < ix1 - 1; x++) { g[iy0 + 2][x] = TILE_TYPE.ROAD; g[iy1 - 2][x] = TILE_TYPE.ROAD; }
   for (let y = iy0 + 2; y < iy1 - 1; y++) { g[y][ix0 + 2] = TILE_TYPE.ROAD; g[y][ix1 - 2] = TILE_TYPE.ROAD; }
 
-  // 中圈：神职人员居住区 + 武魂学院（低密度大宅）
-  fillRect(g, mx0 + 3, my0 + 4, mx0 + 12, my0 + 12, TILE_TYPE.COLLEGE);
-  // 中圈内环 + 十字大街划分的四个象限，每个象限低密度住宅
+  // 中圈：武魂学院（10×9 大图）+ 神职人员居住区（低密度）
+  placeBuilding(c, g, mx0 + 3, my0 + 4, 10, 9, TILE_TYPE.COLLEGE, 'college-s');
   // 东北象限
-  fillBlock2x2(g, ix1 + 2, my0 + 4, mx1 - 4, iy0 - 2, rng, 0.4);
+  fillBlock2x2(c, g, ix1 + 2, my0 + 4, mx1 - 4, iy0 - 2, rng, 0.4, ['house']);
   // 西北象限
-  fillBlock2x2(g, mx0 + 4, my0 + 4, ix0 - 2, iy0 - 2, rng, 0.4);
+  fillBlock2x2(c, g, mx0 + 4, my0 + 4, ix0 - 2, iy0 - 2, rng, 0.4, ['house']);
   // 东南象限
-  fillBlock2x2(g, ix1 + 2, iy1 + 2, mx1 - 4, my1 - 4, rng, 0.4);
+  fillBlock2x2(c, g, ix1 + 2, iy1 + 2, mx1 - 4, my1 - 4, rng, 0.4, ['house']);
   // 西南象限
-  fillBlock2x2(g, mx0 + 4, iy1 + 2, ix0 - 2, my1 - 4, rng, 0.4);
+  fillBlock2x2(c, g, mx0 + 4, iy1 + 2, ix0 - 2, my1 - 4, rng, 0.4, ['house']);
   // 中圈环路
   for (let x = mx0 + 3; x < mx1 - 2; x++) { g[my0 + 3][x] = TILE_TYPE.ROAD; g[my1 - 3][x] = TILE_TYPE.ROAD; }
   for (let y = my0 + 3; y < my1 - 2; y++) { g[y][mx0 + 3] = TILE_TYPE.ROAD; g[y][mx1 - 3] = TILE_TYPE.ROAD; }
@@ -496,7 +543,7 @@ function genWuhunCity(c, g, set, get, rng) {
     for (let by = 4; by < h - 4; by += 12) {
       // 跳过中圈以里
       if (bx + 10 >= mx0 && bx <= mx1 && by + 10 >= my0 && by <= my1) continue;
-      fillBlock2x2(g, bx + 1, by + 1, Math.min(bx + 10, w - 3), Math.min(by + 10, h - 3), rng, 0.8);
+      fillBlock2x2(c, g, bx + 1, by + 1, Math.min(bx + 10, w - 3), Math.min(by + 10, h - 3), rng, 0.8);
     }
   }
 
@@ -514,6 +561,11 @@ function genWuhunCity(c, g, set, get, rng) {
         g[fy][fx] = TILE_TYPE.FLOWER;
     }
   }
+
+  // 圣城棋盘格空档补建（广场、花圃、环路、内圈都不会被占）。
+  // 内圈圣殿院落整圈禁建，民居不得混进分殿之间。
+  cityInfill(c, g, rng, 0.55, ['house'],
+    (x, y) => x > ix0 && x < ix1 && y > iy0 && y < iy1);
 }
 
 // ---- 生成器映射 -----------------------------------------------------------
@@ -752,15 +804,48 @@ const World = {
     if (g) return g;
     const rng = mulberry32(c.seed);
     g = [];
-    for (let y = 0; y < c.h; y++) g[y] = new Array(c.h).fill(TILE_TYPE.GRASS);
-    // 注意：上面错写成 c.h 了（w 列），下面修正
     for (let y = 0; y < c.h; y++) g[y] = new Array(c.w).fill(TILE_TYPE.GRASS);
 
     const set = (x, y, t) => { if (x >= 0 && y >= 0 && x < c.w && y < c.h) g[y][x] = t; };
     const get = (x, y) => (x >= 0 && y >= 0 && x < c.w && y < c.h) ? g[y][x] : -1;
 
+    // 大建筑登记表：placeBuilding 填占地格的同时往这里登记 {x,y,w,h,sprite,tile}
+    c.buildings = [];
     const gen = CITY_GENERATORS[c.name];
     if (gen) gen(c, g, set, get, rng);
+
+    // 地标院落保护：规划街区/全城补建时会把民居塞到地标贴脸（大殿旁边冒出
+    // 一栋瓦楼）。以地标占地外扩 2 格为院，院里的民居拆除、野草铺成广场石；
+    // 已成型的道路/城墙/花圃/人工草坪（操场等）保留。
+    const MAJOR_SPRITES = new Set([
+      'temple-small', 'temple-m', 'temple-l', 'college-s', 'college-l', 'palace', 'arena',
+    ]);
+    const zones = c.buildings
+      .filter(b => MAJOR_SPRITES.has(b.sprite))
+      .map(b => ({ x0: b.x - 2, y0: b.y - 2, x1: b.x + b.w + 1, y1: b.y + b.h + 1 }));
+    c.buildings = c.buildings.filter(b => {
+      if (MAJOR_SPRITES.has(b.sprite)) return true;
+      const hit = zones.some(z =>
+        b.x <= z.x1 && b.x + b.w - 1 >= z.x0 && b.y <= z.y1 && b.y + b.h - 1 >= z.y0);
+      if (hit) fillRect(g, b.x, b.y, b.x + b.w - 1, b.y + b.h - 1, TILE_TYPE.GRASS);
+      return !hit;
+    });
+    for (const z of zones) {
+      for (let y = Math.max(0, z.y0); y <= Math.min(c.h - 1, z.y1); y++) {
+        for (let x = Math.max(0, z.x0); x <= Math.min(c.w - 1, z.x1); x++) {
+          const t = g[y][x];
+          if (t === TILE_TYPE.GRASS || t === TILE_TYPE.YARD) g[y][x] = TILE_TYPE.PLAZA;
+        }
+      }
+    }
+
+    // 全城统一补一圈土院（补建出来的房子生成器里没顾上）
+    yardAroundHouses(g, 0, 0, c.w - 1, c.h - 1);
+
+    // 生成器里大街/环路经常在建筑之后才画，会把占地格切开。
+    // 这里以登记表为准统一重压一遍：建筑永远赢，路到墙边自然断。
+    for (const b of c.buildings)
+      fillRect(g, b.x, b.y, b.x + b.w - 1, b.y + b.h - 1, b.tile);
 
     // 收尾：未使用的 GRASS 改成城内草坪（不长野草、没有野花，干净）
     for (let y = 0; y < c.h; y++) {
