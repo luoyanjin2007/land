@@ -23,6 +23,10 @@ const SHOTS = [
   ['suoto-arena',    505, 440],
   ['wuhun-sanctum',  780, 626],
   ['xingluo-palace', 795, 825],
+  // v35 湖岸复验：城边湖岸应为自然曲线 + 沙岸，不再是矩形直切
+  ['village-south-lake', 266, 178],
+  ['nuoding-ne-lake',    430, 220],
+  ['xingluo-south-lake', 745, 898],
 ];
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));

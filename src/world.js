@@ -901,10 +901,44 @@ const World = {
     // 风景湖（湖面渲染成水；路上的湖格已被上面 road 分支接管 = 木桥）
     if (this.inLakeRaw(x, y)) return TILE_TYPE.WATER;
 
-    // 城郊缓冲（城越大缓冲越宽，保证坐落在平原上）
+    // 城郊缓冲：林/山/沙一进缓冲全压成平原（矩形，保证城池坐落在平原上）；
+    // 但湖不能用矩形硬切——否则湖岸在缓冲边被切成直边尖角。改为：缓冲内
+    // 仍是湖格的，按离城的归一化超椭圆距离把地势往陆地方向抬升：
+    // 深湖保留、湖岸沿噪声弧线绕开城池，只在近城小半圈强制成陆。
     const c = this.cityCovering(x, y);
-    if (c) return TILE_TYPE.GRASS;
+    if (c) {
+      const t0 = this.naturalTile(x, y);
+      if (t0 !== TILE_TYPE.WATER) return TILE_TYPE.GRASS;
+      const e0 = this.n1(x, y) * 0.55 + this.n2(x, y) * 0.3 + this.n3(x, y) * 0.15;
+      const e = e0 + this.cityLakeLift(c, x, y);
+      if (e < 0.28) return TILE_TYPE.WATER;
+      if (e < 0.31) return TILE_TYPE.SAND;
+      return TILE_TYPE.GRASS;
+    }
 
+    return this.naturalTile(x, y);
+  },
+
+  // 湖遇到城时的地势抬升量：贴城一圈强制成陆，向外沿超椭圆（p=3，方圆形）
+  // 衰减到 0，再叠细节噪声抖动——湖岸因此是绕开城池的自然曲线，而不是
+  // 被城郊缓冲切出来的直边。返回值与起伏 e 同量纲（水面阈值 0.28）。
+  cityLakeLift(c, x, y) {
+    const padX = Math.max(12, Math.floor(c.w / 3));
+    const padY = Math.max(12, Math.floor(c.h / 3));
+    const dx = Math.max(c.x - x, 0, x - (c.x + c.w - 1));
+    const dy = Math.max(c.y - y, 0, y - (c.y + c.h - 1));
+    const ux = dx / padX, uy = dy / padY;
+    const d = Math.cbrt(ux * ux * ux + uy * uy * uy);
+    const inner = 0.3;
+    if (d <= inner) return 0.6;
+    if (d >= 1) return 0;
+    const t = (d - inner) / (1 - inner);
+    const s = t * t * (3 - 2 * t);
+    return 0.6 * (1 - s) + (this.n3(x, y) - 0.5) * 0.12;
+  },
+
+  // 不受城市/道路/风景湖影响的自然底质：海神岛、海岸线、山林、沙漠、内陆湖
+  naturalTile(x, y) {
     // 海神岛（西侧大海中的仙岛）
     const gi = this.godIsland;
     const ddx = (x - gi.x) / gi.rx, ddy = (y - gi.y) / gi.ry;
