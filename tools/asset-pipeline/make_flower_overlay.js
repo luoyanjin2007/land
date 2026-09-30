@@ -4,12 +4,14 @@
 // （平均 rgb(88,189,108) vs 基准草地 rgb(50,162,80)），看起来像花自带
 // 一块异色地面。抠掉绿底后叠在基准草地上，花就成了纯点缀。
 //
-// 用法: node tools/make_flower_overlay.js
+// 用法: node tools/asset-pipeline/make_flower_overlay.js
 
+const path = require('path');
 const { Jimp } = require('jimp');
 
-const SRC = 'assets/sprites/tile-flower.png';
-const OUT = 'assets/sprites/tile-flower-overlay.png';
+const ROOT = path.join(__dirname, '..', '..');
+const SRC = path.join(ROOT, 'assets/sprites/tile-flower.png');
+const OUT = path.join(ROOT, 'assets/sprites/tile-flower-overlay.png');
 const SOFT = 18;   // 绿色主导度阈值：>=SOFT 全透明，<=0 全保留，中间线性过渡
 
 (async () => {

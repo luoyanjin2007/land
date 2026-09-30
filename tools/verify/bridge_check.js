@@ -1,7 +1,7 @@
-// 桥与地形分布检查：node tools/bridge_check.js
+// 桥与地形分布检查：node tools/verify/bridge_check.js
 const fs = require('fs');
 const path = require('path');
-const ROOT = path.join(__dirname, '..');
+const ROOT = path.join(__dirname, '..', '..');
 const cfg = fs.readFileSync(path.join(ROOT, 'src/config.js'), 'utf8');
 const world = fs.readFileSync(path.join(ROOT, 'src/world.js'), 'utf8');
 eval(cfg + '\n' + world + `

@@ -1,7 +1,7 @@
 // 无头 Edge + CDP 截图验证：自动点过标题/觉醒界面，把人物传送到各城市地标，
-// 逐张截图输出到 tools/shots/。不依赖 playwright/puppeteer（Node 24 自带 WebSocket）。
+// 逐张截图输出到 tools/screenshots/shots/。不依赖 playwright/puppeteer（Node 24 自带 WebSocket）。
 //
-// 用法: node tools/shot.cjs
+// 用法: node tools/screenshots/shot.cjs（需先在 8080 端口起静态服务）
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');

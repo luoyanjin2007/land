@@ -15,5 +15,5 @@ Thumbs.db
 node_modules/
 
 # 截图/抠图验收产物（本地生成）
-tools/shots/
-tools/*-trim-preview.png
+tools/screenshots/shots/
+tools/asset-pipeline/previews/

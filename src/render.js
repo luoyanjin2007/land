@@ -437,7 +437,7 @@ const Render = {
 
   // 性能面板（P 键开关）：各图层耗时用指数滑动平均，否则数字跳得看不清。
   // 存在的意义是别再靠"调用次数推算"猜瓶颈——线上读数字才算证据。
-  BUILD: '33',
+  BUILD: '36',
   perf: {
     on: false, bare: false, off: {},
     frame: 0, chunk: 0, water: 0, tuft: 0, trees: 0, other: 0,
@@ -1320,12 +1320,14 @@ const Render = {
     // 游戏时间：240 秒 = 1 天（与昼夜循环同步）
     const day = Math.floor(time / 1000 / 240) + 1;
     const t1 = (time / 1000) % 240;
+    // 时段直接由 Ambience 的夜浓度反推，保证 HUD 文字与实际天色一致
+    // （night=max(0,sin)：0~120s 白天，120 转黄昏，180 子夜，240 回白天）
+    const night = Ambience.nightLevel(t1 * 1000);
     let phase, icon;
-    if (t1 < 25) { phase = '黎明'; icon = '🌅'; }
-    else if (t1 < 95) { phase = '夜晚'; icon = '🌙'; }
-    else if (t1 < 120) { phase = '黎明'; icon = '🌅'; }
-    else if (t1 < 210) { phase = '白天'; icon = '☀️'; }
-    else { phase = '黄昏'; icon = '🌆'; }
+    if (night < 0.12) { phase = '白天'; icon = '☀️'; }
+    else if (night > 0.55) { phase = '夜晚'; icon = '🌙'; }
+    else if (t1 < 180) { phase = '黄昏'; icon = '🌆'; }
+    else { phase = '黎明'; icon = '🌅'; }
     const city = World.cityAt(Player.tileX(), Player.tileY());
     const move = Player.inWater ? '🏊 游泳中'
       : (Input.running() ? '🏃 奔跑中' : '🚶 步行');

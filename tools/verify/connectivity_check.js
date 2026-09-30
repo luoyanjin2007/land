@@ -1,12 +1,12 @@
 // 可走性连通诊断：城门之间不借道路、只走自然地形，能否互通？
 const fs = require('fs');
 const path = require('path');
-const ROOT = path.join(__dirname, '..');
+const ROOT = path.join(__dirname, '..', '..');
 const cfg = fs.readFileSync(path.join(ROOT, 'src/config.js'), 'utf8');
 const world = fs.readFileSync(path.join(ROOT, 'src/world.js'), 'utf8');
 eval(cfg + '\n' + world + `
 World.generate(20260901);
-const links = [[0,1],[1,2],[1,3],[3,4],[4,5]];
+const links = [[0,1],[1,2],[2,3],[3,5],[5,4],[1,3]];
 const K = (x,y) => x + ',' + y;
 links.forEach(([a,b], i) => {
   const A = World.cities[a], B = World.cities[b];

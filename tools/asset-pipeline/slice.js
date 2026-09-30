@@ -1,10 +1,10 @@
 // 从 AI 生成的素材图集中切图，白底转透明，输出到 assets/sprites/
-// 用法: node tools/slice.js
+// 用法: node tools/asset-pipeline/slice.js
 const fs = require('fs');
 const path = require('path');
 const { Jimp } = require('jimp');
 
-const ROOT = path.join(__dirname, '..');
+const ROOT = path.join(__dirname, '..', '..');
 const OUT = path.join(ROOT, 'assets', 'sprites');
 fs.mkdirSync(OUT, { recursive: true });
 

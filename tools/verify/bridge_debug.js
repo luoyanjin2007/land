@@ -1,7 +1,7 @@
 // 桥诊断：为什么没有桥
 const fs = require('fs');
 const path = require('path');
-const ROOT = path.join(__dirname, '..');
+const ROOT = path.join(__dirname, '..', '..');
 const cfg = fs.readFileSync(path.join(ROOT, 'src/config.js'), 'utf8');
 const world = fs.readFileSync(path.join(ROOT, 'src/world.js'), 'utf8');
 eval(cfg + '\n' + world + `

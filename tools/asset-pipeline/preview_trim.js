@@ -1,14 +1,17 @@
 // 离线复刻 render.js 的 trimWhiteSprite：边缘泛洪抠白 + 包围盒裁切，
 // 再合成到深绿背景上导出 PNG，供肉眼检查白背景是否抠净、内部白墙是否被误抠。
-// 用法: node tools/preview_trim.js [name...]
+// 用法: node tools/asset-pipeline/preview_trim.js [name...]
+const fs = require('fs');
 const path = require('path');
 const { Jimp } = require('jimp');
 
 const S = 1024;
 const names = require('process').argv.slice(2);
+const OUT_DIR = path.join(__dirname, 'previews');
+fs.mkdirSync(OUT_DIR, { recursive: true });
 
 async function process(name) {
-  const img = await Jimp.read(path.join(__dirname, '..', 'assets', 'sprites', 'buildings', name + '.jpg'));
+  const img = await Jimp.read(path.join(__dirname, '..', '..', 'assets', 'sprites', 'buildings', name + '.jpg'));
   img.resize({ w: S, h: S });
   const { data: px } = img.bitmap;
 
@@ -61,7 +64,7 @@ async function process(name) {
     cd[di + 1] = px[si + 1] * a + cd[di + 1] * (1 - a);
     cd[di + 2] = px[si + 2] * a + cd[di + 2] * (1 - a);
   }
-  const out = path.join(__dirname, name + '-trim-preview.png');
+  const out = path.join(OUT_DIR, name + '-trim-preview.png');
   await crop.write(out);
   console.log(name, 'crop=', cw + 'x' + ch, '->', out);
 }
